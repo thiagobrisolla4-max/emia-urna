@@ -1,0 +1,19 @@
+{
+  "name": "emia-urna",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Urna eletronica para a eleicao do Conselho da EMIA (biênio 2026-2028)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "pg": "^8.12.0"
+  }
+}

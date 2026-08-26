@@ -1,0 +1,205 @@
+const { Pool } = require('pg');
+const crypto = require('crypto');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('localhost')
+    ? false
+    : { rejectUnauthorized: false },
+});
+
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS voters (
+      id SERIAL PRIMARY KEY,
+      token TEXT UNIQUE NOT NULL,
+      segment TEXT NOT NULL CHECK (segment IN ('docente','familia')),
+      display_name TEXT NOT NULL,
+      contact TEXT,
+      has_voted BOOLEAN NOT NULL DEFAULT FALSE,
+      voted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS votes (
+      id SERIAL PRIMARY KEY,
+      segment TEXT NOT NULL CHECK (segment IN ('docente','familia')),
+      candidate_id TEXT,
+      cast_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS incidents (
+      id SERIAL PRIMARY KEY,
+      description TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+}
+
+function newToken() {
+  return crypto.randomBytes(9).toString('base64url');
+}
+
+async function importVoters(rows) {
+  // rows: [{ name, contact, segment }]
+  const client = await pool.connect();
+  const results = [];
+  try {
+    await client.query('BEGIN');
+    for (const row of rows) {
+      let token = newToken();
+      let inserted = false;
+      for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
+        try {
+          await client.query(
+            'INSERT INTO voters (token, segment, display_name, contact) VALUES ($1,$2,$3,$4)',
+            [token, row.segment, row.name, row.contact || null]
+          );
+          inserted = true;
+        } catch (e) {
+          if (e.code === '23505') { // unique_violation on token, retry with a fresh one
+            token = newToken();
+          } else {
+            throw e;
+          }
+        }
+      }
+      results.push({ ...row, token });
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+  return results;
+}
+
+async function getVoterByToken(token) {
+  const r = await pool.query('SELECT * FROM voters WHERE token = $1', [token]);
+  return r.rows[0] || null;
+}
+
+async function castVote(token, candidateId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query('SELECT * FROM voters WHERE token = $1 FOR UPDATE', [token]);
+    const voter = r.rows[0];
+    if (!voter) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'not_found' };
+    }
+    if (voter.has_voted) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'already_voted' };
+    }
+    const open = await isVotingOpenTx(client);
+    if (!open) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'closed' };
+    }
+    await client.query(
+      'INSERT INTO votes (segment, candidate_id) VALUES ($1,$2)',
+      [voter.segment, candidateId || null]
+    );
+    await client.query(
+      'UPDATE voters SET has_voted = TRUE, voted_at = now() WHERE id = $1',
+      [voter.id]
+    );
+    await client.query('COMMIT');
+    return { ok: true, segment: voter.segment };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function isVotingOpenTx(client) {
+  const r = await client.query("SELECT key, value FROM settings WHERE key IN ('opened_at','closed_at')");
+  const map = Object.fromEntries(r.rows.map((row) => [row.key, row.value]));
+  return Boolean(map.opened_at) && !map.closed_at;
+}
+
+async function isVotingOpen() {
+  const r = await pool.query("SELECT key, value FROM settings WHERE key IN ('opened_at','closed_at')");
+  const map = Object.fromEntries(r.rows.map((row) => [row.key, row.value]));
+  return Boolean(map.opened_at) && !map.closed_at;
+}
+
+async function setSetting(key, value) {
+  await pool.query(
+    'INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
+    [key, value]
+  );
+}
+
+async function clearSetting(key) {
+  await pool.query('DELETE FROM settings WHERE key = $1', [key]);
+}
+
+async function getSettings() {
+  const r = await pool.query('SELECT key, value FROM settings');
+  return Object.fromEntries(r.rows.map((row) => [row.key, row.value]));
+}
+
+async function stats() {
+  const aptos = await pool.query(
+    "SELECT segment, count(*)::int AS total FROM voters GROUP BY segment"
+  );
+  const votantes = await pool.query(
+    "SELECT segment, count(*)::int AS total FROM voters WHERE has_voted GROUP BY segment"
+  );
+  const resultados = await pool.query(
+    "SELECT segment, candidate_id, count(*)::int AS total FROM votes GROUP BY segment, candidate_id"
+  );
+  return { aptos: aptos.rows, votantes: votantes.rows, resultados: resultados.rows };
+}
+
+async function listVoters() {
+  const r = await pool.query(
+    'SELECT token, segment, display_name, contact, has_voted, voted_at FROM voters ORDER BY segment, display_name'
+  );
+  return r.rows;
+}
+
+async function addIncident(description) {
+  await pool.query('INSERT INTO incidents (description) VALUES ($1)', [description]);
+}
+
+async function listIncidents() {
+  const r = await pool.query('SELECT * FROM incidents ORDER BY created_at DESC');
+  return r.rows;
+}
+
+async function resetTestData() {
+  await pool.query('DELETE FROM votes');
+  await pool.query('DELETE FROM voters');
+  await pool.query('DELETE FROM incidents');
+  await pool.query("DELETE FROM settings WHERE key IN ('opened_at','closed_at','published')");
+}
+
+module.exports = {
+  pool,
+  initSchema,
+  importVoters,
+  getVoterByToken,
+  castVote,
+  isVotingOpen,
+  setSetting,
+  clearSetting,
+  getSettings,
+  stats,
+  listVoters,
+  addIncident,
+  listIncidents,
+  resetTestData,
+};
