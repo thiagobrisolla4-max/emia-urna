@@ -18,8 +18,9 @@ criar a conta (só o plano do servidor é pago).
 1. Vá em [github.com/new](https://github.com/new), crie um repositório
    **privado** chamado `emia-urna` (mantenha privado — o código tem os
    nomes das candidatas e a lógica interna do sistema).
-2. No terminal, dentro desta pasta (`C:\Users\Thiago\Desktop\emia-urna`),
-   rode:
+2. No terminal, dentro desta pasta (`SYNC\_PY\10_PROJETOS_ATIVOS\emia-urna`,
+   em qualquer dispositivo onde o Syncthing já tenha sincronizado — PC Torre
+   ou notebook), rode:
    ```
    git init
    git add .
