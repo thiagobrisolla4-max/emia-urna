@@ -1,5 +1,7 @@
-// Lista final de candidatas, extraida de
+// Lista final de candidatas. Docentes extraidas de
 // "Resultado_candidaturas_Conselho_EMIA_assinado.pdf" (assinado 19/08/2026).
+// Familias (incluindo Angelica de Aguiar Tozzo, ausente na 1a versao deste
+// arquivo) conferidas em 26/08/2026 contra o PDF de candidatos da edicao 2026.
 // A fase de recursos (20-24/08/2026) ja passou; esta lista e definitiva.
 
 const REAL_CANDIDATES = {
@@ -26,8 +28,18 @@ const REAL_CANDIDATES = {
     },
   ],
   familia: [
-    { id: 'fam-1', name: 'Marcia Cristina Nunes', unit: 'EMIA Jabaquara', bio: '' },
-    { id: 'fam-2', name: 'Marina Dantas Oliveira Bortotti', unit: 'EMIA Chácara das Flores', bio: '' },
+    {
+      id: 'fam-1', name: 'Marcia Cristina Nunes', unit: 'EMIA Jabaquara',
+      bio: 'Sou Márcia Nunes, psicóloga e arteterapeuta. Tenho 3 filhas e 1 filho com meu companheiro. Sou mãe da EMIA Jabaquara desde 2010 e também sou aluna da Oficina de Bordado este ano. Acompanho o trabalho realizado pelo Conselho desde 2016 e participei por 2 vezes como representante das famílias. Sou apaixonada pela EMIA! A relação com o poder público traz grandes desafios, mas espero poder continuar representando as famílias de todas as EMIAs e dar continuidade ao trabalho e projetos que temos desenvolvido.',
+    },
+    {
+      id: 'fam-2', name: 'Marina Dantas Oliveira Bortotti', unit: 'EMIA Chácara das Flores',
+      bio: 'Marina Bortotti é mãe EMIA, formada em Técnico em Orientação Comunitária, Educadora Social e Coordenadora de Projetos Sociais e Culturais. Graduanda em Gestão de Políticas Públicas, atua na área cultural com experiência em gestão de pessoas, produção e eventos. Na EMIA, acredita na arte como instrumento de desenvolvimento, convivência e transformação. Como representante das famílias, busca potencializar o diálogo e a troca de experiências entre os diferentes territórios e EMIAs de São Paulo, ampliando a escuta ativa para que as necessidades, ideias e propostas das famílias sejam acolhidas e contribuam coletivamente para o fortalecimento das escolas.',
+    },
+    {
+      id: 'fam-3', name: 'Angelica de Aguiar Tozzo', unit: 'EMIA Brasilândia',
+      bio: 'Bacharel em Serviço Social, atualmente trabalhando em um Cursinho Popular para jovens que irão prestar prova do ENEM e também em um Centro de Acolhida para pessoas em situação de rua. Mãe de duas alunas da EMIA Brasilândia, que estão na escola desde 2023. Já atuei em diversos projetos sociais no território da Brasilândia.',
+    },
   ],
 };
 
