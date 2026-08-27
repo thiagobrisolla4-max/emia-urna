@@ -66,6 +66,18 @@ label {
   background: #f5f0ff;
 }
 
+details.bio {
+  margin: -6px 0 14px 14px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+details.bio summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+details.bio p { margin: 8px 0 0; }
+
 input[type="text"], input[type="password"], textarea {
   width: 100%;
   padding: 10px;

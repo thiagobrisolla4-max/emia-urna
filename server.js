@@ -108,12 +108,17 @@ app.get('/votar/:token', ah(async (req, res) => {
       <input type="radio" name="candidate_id" value="${escapeHtml(c.id)}" required>
       <span><strong>${escapeHtml(c.name)}</strong>${c.unit ? ` — ${escapeHtml(c.unit)}` : ''}</span>
     </label>
+    ${c.bio ? `<details class="bio"><summary>Ver currículo</summary><p>${escapeHtml(c.bio)}</p></details>` : ''}
   `).join('');
+  const avisoFamilia = voter.segment === 'familia'
+    ? '<p class="warn">Atenção, famílias: o voto é por família — apenas um(a) responsável deve votar por família (Edital, item 3.4.1). Confirmem entre vocês quem vai votar antes de usar este link.</p>'
+    : '';
   res.send(page('Votar', `
     <h1>Cédula — ${escapeHtml(SEGMENT_LABELS[voter.segment])}</h1>
     <p>Eleitor(a): <strong>${escapeHtml(voter.display_name)}</strong></p>
     <p class="warn">Seu voto é secreto. O sistema não guarda nenhuma ligação
     entre sua identidade e o candidato escolhido.</p>
+    ${avisoFamilia}
     <form method="post" action="/votar/${escapeHtml(req.params.token)}">
       ${options}
       <label class="candidate">
