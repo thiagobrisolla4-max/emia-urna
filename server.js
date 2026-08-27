@@ -282,7 +282,8 @@ João Souza,joao@email.com,familia"></textarea>
     </form>
 
     <h2>Lista de eleitores e credenciais</h2>
-    <p><a href="/admin/credenciais.csv">Baixar lista completa (CSV) para distribuição</a></p>
+    <p><a href="/admin/credenciais.csv">Baixar lista completa (CSV) para distribuição</a> —
+    <a href="/admin/buscar">Buscar eleitor por nome (urna física / atendimento presencial)</a></p>
 
     <h2>Ocorrências técnicas</h2>
     <form method="post" action="/admin/ocorrencia">
@@ -300,6 +301,38 @@ João Souza,joao@email.com,familia"></textarea>
     <form method="post" action="/admin/zerar" onsubmit="return confirm('Tem certeza? Isso apaga tudo.');">
       <button type="submit">Zerar dados de teste</button>
     </form>
+  `));
+}));
+
+app.get('/admin/buscar', requireAdmin, ah(async (req, res) => {
+  const q = (req.query.q || '').trim();
+  const host = req.protocol + '://' + req.get('host');
+  const results = q.length >= 2 ? await db.searchVotersByName(q) : [];
+  const rows = results.map((v) => `
+    <tr>
+      <td><strong>${escapeHtml(v.display_name)}</strong><br><span class="muted">${escapeHtml(SEGMENT_LABELS[v.segment])}</span></td>
+      <td>${v.has_voted
+        ? `<span class="warn" style="display:inline-block">Já votou em ${new Date(v.voted_at).toLocaleString('pt-BR')}</span>`
+        : `<a href="${host}/votar/${escapeHtml(v.token)}" target="_blank" rel="noopener"><button type="button">Abrir cédula</button></a>`
+      }</td>
+    </tr>
+  `).join('');
+  res.send(page('Buscar eleitor', `
+    <h1>Buscar eleitor — urna física / atendimento presencial</h1>
+    <p>Use esta tela na recepção da EMIA: digite o nome de quem vai votar
+    presencialmente, clique em <strong>Abrir cédula</strong> (abre em nova aba)
+    e entregue o computador/tablet para a pessoa votar sozinha. Feche a aba
+    depois, antes de atender a próxima pessoa.</p>
+    <form method="get" action="/admin/buscar">
+      <input type="text" name="q" placeholder="Digite pelo menos 2 letras do nome" value="${escapeHtml(q)}" autofocus>
+      <button type="submit">Buscar</button>
+    </form>
+    ${q.length >= 2 ? `
+      <table><thead><tr><th>Eleitor(a)</th><th>Ação</th></tr></thead><tbody>
+        ${rows || '<tr><td colspan="2">Nenhum eleitor encontrado com esse nome.</td></tr>'}
+      </tbody></table>
+    ` : ''}
+    <p><a href="/admin/painel">Voltar ao painel</a></p>
   `));
 }));
 

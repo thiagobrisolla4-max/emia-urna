@@ -29,13 +29,15 @@ body {
 h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
 h2 { font-size: 1.15rem; margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 
-p.warn {
+.warn {
   background: var(--warn-bg);
   border: 1px solid var(--warn-border);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 0.95rem;
 }
+
+.muted { color: var(--muted); font-size: 0.85rem; }
 
 code {
   background: #f2f2f2;

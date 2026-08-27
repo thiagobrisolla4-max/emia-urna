@@ -171,6 +171,16 @@ async function listVoters() {
   return r.rows;
 }
 
+async function searchVotersByName(query) {
+  const r = await pool.query(
+    `SELECT token, segment, display_name, contact, has_voted, voted_at FROM voters
+     WHERE display_name ILIKE '%' || $1 || '%'
+     ORDER BY display_name LIMIT 25`,
+    [query]
+  );
+  return r.rows;
+}
+
 async function addIncident(description) {
   await pool.query('INSERT INTO incidents (description) VALUES ($1)', [description]);
 }
@@ -199,6 +209,7 @@ module.exports = {
   getSettings,
   stats,
   listVoters,
+  searchVotersByName,
   addIncident,
   listIncidents,
   resetTestData,

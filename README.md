@@ -126,6 +126,23 @@ oficial, registrando o teste em ata. Faça assim:
    anexar na Ata de apuração.
 5. Registrem tudo em Ata, como sempre.
 
+## 4.1 Voto presencial nas EMIAs (opcional, além do link por celular)
+
+Não é obrigatório nada especial: qualquer computador/tablet com navegador e
+internet abre o mesmo site. Pra montar um ponto de voto presencial em uma
+unidade:
+
+1. Deixe um computador/tablet na recepção, com o navegador em **aba anônima**
+   (evita que o histórico guarde o link de quem votou).
+2. Um responsável da Comissão acessa `/admin/buscar` (dentro do painel
+   admin), digita o nome de quem vai votar, clica em **Abrir cédula** (abre
+   em nova aba) e entrega o aparelho pra pessoa votar sozinha.
+3. Feche a aba depois de cada voto, antes do próximo eleitor.
+
+Quem abre o link vê **quem** está votando (não em quem) — por isso precisa
+ser sempre alguém de confiança da Comissão, igual a uma mesa de votação
+física comum.
+
 ## 5. Notas técnicas (se algo der errado)
 
 - **Sigilo do voto**: a tabela `votes` no banco não tem nenhuma coluna
