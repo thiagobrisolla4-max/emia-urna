@@ -7,6 +7,12 @@ individual por link, um voto por credencial, sigilo do voto (a tabela de
 votos não guarda nenhuma referência a quem votou), apuração e auditoria pela
 Comissão, e registro de ocorrências técnicas.
 
+> **Nota (01/09/2026):** o deploy **já está feito** — site no ar em
+> https://emia-urna.onrender.com , repo
+> `github.com/thiagobrisolla4-max/emia-urna`, deploy automático no `git push`
+> da branch `main`. Links em `LINKS.md`. A seção 1 abaixo fica como
+> referência de como o ambiente foi montado.
+
 ## 1. Fazer o deploy no Render (passo a passo)
 
 Isso leva uns 15 minutos. Você vai precisar de uma conta no GitHub e uma
@@ -112,6 +118,40 @@ oficial, registrando o teste em ata. Faça assim:
    pessoas diferentes.**
 4. Clique em **Abrir votação agora**.
 5. Acompanhem a participação em tempo real no painel.
+
+## 3.1 Instalador serial + Portal da Família (recomendado)
+
+Em vez de montar a lista na mão, use o **`instalador.py`**. Ele lê as
+planilhas de docentes e famílias (`DADOS Educadores EMIA.xlsx`,
+`LISTA CONTATOS - Chácara do Jóquei.xlsx`, etc.), corrige encoding e lixo nos
+nomes, normaliza telefones, **agrupa a família toda numa credencial só**
+(irmãos + mãe/pai/avó = 1 voto), casa com as credenciais já existentes pra
+não duplicar, e gera arquivos prontos pra colar no painel:
+
+```
+python instalador.py
+# escreve ./saida_instalador/
+#   A_chaves_para_tokens_existentes.tsv  -> painel: "Vincular chaves a credenciais já existentes"
+#   B_novos_eleitores.tsv                -> painel: "Importar eleitores"
+#   C_conferencia_familias.csv           -> conferência humana (Excel)
+#   D..G_*.csv                           -> telefones suspeitos, possíveis duplicatas, conflitos
+#   RESUMO.txt                           -> contagem + passo a passo
+```
+
+Requisitos: `pip install openpyxl pypdf`.
+
+**Portal da Família — `/acesso`**: página pública onde o responsável digita
+**um** dado (telefone, e-mail, ou o nome completo de um(a) estudante da
+família) e é levado à cédula da família. Assim a Comissão manda **um link só**
+(`/acesso`) no grupo/lista das famílias, em vez de um link por família. As
+"chaves" (telefones, e-mails, nomes) são indexadas na tabela `voter_keys`,
+que **nunca** se liga a `votes` — o sigilo do voto continua intacto. O portal
+tem um liga/desliga no painel e um limite de tentativas por IP.
+
+Quando a lista da EMIA Jabaquara (famílias) chegar: baixe o CSV atualizado
+em `/admin`, substitua o `credenciais-emia.csv` local, adicione o arquivo
+novo em `SRC_FAMILIA_XLSX` no topo do `instalador.py`, rode de novo e cole
+os `A_`/`B_` outra vez — famílias já importadas não duplicam.
 
 ## 4. No encerramento (05/09/2026, até 12h)
 

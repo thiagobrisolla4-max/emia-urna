@@ -29,28 +29,59 @@ parecer ambígua, em vez de assumir.
 
 ## Estado atual (verifique se isso ainda bate antes de confiar cegamente)
 
-- Código completo e funcional: `server.js`, `db.js`, `candidates.js`,
-  `public/style.css`.
-- **Testado ponta a ponta** com Postgres em memória (`pg-mem`), incluindo o
-  fluxo HTTP completo via `fetch` real contra o `server.js` de verdade —
-  não é teste teórico. Nesse processo foi encontrado e corrigido um bug real
-  (`isVotingOpenTx` em `db.js` não selecionava a coluna `key`, o que faria
-  todo voto real ser rejeitado silenciosamente mesmo com a votação aberta).
-  Os scripts de teste não fazem parte do repositório (rodaram numa pasta
-  temporária de scratch) — se for mexer na lógica de novo, vale recriar um
-  teste parecido antes de confiar em mudanças no fluxo de voto.
-- **Ainda NÃO foi feito o deploy.** Falta:
-  1. Criar repositório no GitHub (privado) e dar `git push` — o commit
-     inicial já existe localmente (`git log` mostra 1 commit).
-  2. Seguir o passo a passo da seção 1 do `README.md` pra criar o banco e o
-     serviço web no Render.
-  3. Rodar o teste oficial exigido pelo Edital (seção 2 do README) e
-     registrar em ata.
-  4. Só depois disso, importar a lista real de eleitores e abrir a votação.
+Atualizado em **01/09/2026**. Links em `LINKS.md`.
 
-Se este arquivo estiver desatualizado em relação a isso (por exemplo, se o
-deploy já foi feito), confie no que você observar no código/no Render, não
-neste texto.
+- **Deploy JÁ FEITO.** Site no ar em https://emia-urna.onrender.com , repo
+  `github.com/thiagobrisolla4-max/emia-urna`, deploy automático no push da
+  branch `main`. (O texto antigo dizia "falta deploy" — estava desatualizado.)
+- **Votação ainda FECHADA** (`opened_at` não setado). Nenhum link `/votar`
+  funciona pra votar até a Comissão clicar em "Abrir votação agora".
+- **359 credenciais de família já importadas** no banco de produção
+  (Perus 121, Parelheiros 93, Brasilândia 74, Flores 71). Os links **ainda
+  não foram enviados** a ninguém (confirmado por Thiago em 01/09).
+- **0 docentes importados** ainda.
+- Código: `server.js`, `db.js`, `candidates.js`, `keys.js`, `public/style.css`.
+  As bios das candidatas já estão em `candidates.js` e já têm botão que revela
+  (`<details class="bio">` em `server.js`, estilo em `style.css`). O
+  `fichas_eleiçao_conselho.pdf` é escaneado (sem texto) — não dá pra extrair
+  bio de lá.
+
+### Novidades desta sessão (01/09) — ainda NÃO deployadas / importadas
+
+1. **Portal da Família (`/acesso`)** — página pública onde a pessoa digita
+   um telefone, e-mail OU o nome completo de um(a) estudante da família e é
+   levada à cédula da família. Um voto por família: irmãos e vários
+   responsáveis (mãe/pai/avó) caem todos na MESMA credencial.
+2. **Tabela nova `voter_keys`** (em `db.js`, criada sozinha no boot via
+   `initSchema`) — indexa as "chaves de acesso". **Nunca referencia `votes`**;
+   o sigilo continua estrutural. Normalização de chave mora em `keys.js`
+   (fonte única da verdade, usada na importação e na busca). Ver comentário
+   no topo de `keys.js`.
+3. **Painel admin** ganhou: importação em formato TSV com chaves, caixa
+   "Vincular chaves a credenciais já existentes", toggle liga/desliga do
+   portal, e contadores de chaves indexadas.
+4. **`instalador.py`** — instalador serial. Lê `DADOS Educadores EMIA.xlsx`
+   (90 docentes), `LISTA CONTATOS - Chácara do Jóquei.xlsx` (571 linhas →
+   504 famílias), + as listas de Flores/Perus/Brasilândia/Parelheiros, limpa
+   encoding/lixo, agrupa famílias, casa com as 359 credenciais já existentes
+   pra não duplicar, e gera em `./saida_instalador/` os arquivos prontos pra
+   colar no painel (`A_*` = vincular chaves nos 359 tokens; `B_*` = importar
+   90 docentes + 504 famílias novas). Ver `saida_instalador/RESUMO.txt`.
+
+### O que falta (ordem)
+
+1. `git push` da versão nova (cria `voter_keys` + `/acesso` no Render).
+2. `python instalador.py` e conferir `saida_instalador/RESUMO.txt` +
+   `C_conferencia_familias.csv` + `G_conflito_credencial_dupla.csv`.
+3. No `/admin`: colar `B_novos_eleitores.tsv` em "Importar eleitores" e
+   `A_chaves_para_tokens_existentes.tsv` em "Vincular chaves". **Não**
+   clicar em "Zerar dados" (perde os 359).
+4. Testar `/acesso` com telefones/nomes reais. Rodar o teste oficial do
+   Edital, registrar em ata.
+5. Falta chegar a **lista de famílias da EMIA Jabaquara** — Thiago aceita
+   abrir a votação sem ela e adicionar depois (rodar o instalador de novo
+   com o arquivo novo; famílias já importadas não duplicam).
+6. Só então "Abrir votação agora".
 
 ## Decisões de design que não devem ser revertidas sem entender o motivo
 
@@ -64,7 +95,14 @@ neste texto.
 - **Distribuição de credencial é manual** (a Comissão baixa um CSV e manda
   os links por WhatsApp/e-mail), não automática por e-mail — decisão de
   Thiago pra não depender de um serviço de envio de terceiro sob prazo
-  apertado.
+  apertado. **Complemento (01/09):** com o Portal da Família (`/acesso`),
+  a Comissão pode mandar só UM link genérico (`/acesso`) pras famílias, em
+  vez de um link individual por família — a pessoa se identifica lá. O CSV
+  individual continua existindo como plano B.
+- **`voter_keys` liga contato → credencial, nunca → voto.** É o mesmo nível
+  de exposição do CSV de credenciais que a Comissão já distribuiria na mão.
+  Não "enfraquece" o sigilo — quem tem acesso ao banco já via
+  `voters.display_name`. O que continua impossível é ligar credencial a voto.
 
 ## Onde isto vive
 
@@ -77,8 +115,9 @@ nessa mesma pasta.
 
 ## Primeira coisa a fazer nesta sessão
 
-Pergunte a Thiago em que ponto ele está (ainda vai fazer o deploy? já fez?
-já importou eleitores? a votação já abriu?) antes de assumir qualquer coisa
-— isso muda completamente o que faz sentido fazer a seguir. Se ele disser
-só "continua", comece lendo `README.md` inteiro e perguntando qual dos
-passos da seção 1-4 ele já completou.
+Pergunte a Thiago em que ponto ele está (já fez `git push` da versão com
+`/acesso`? já rodou o `instalador.py`? já colou os arquivos `A_`/`B_` no
+painel? a votação já abriu? a lista da Jabaquara chegou?) antes de assumir
+qualquer coisa. Confira o estado real: `curl https://emia-urna.onrender.com`
+e o `git log`. O `saida_instalador/RESUMO.txt` (se existir localmente) tem o
+passo a passo detalhado.

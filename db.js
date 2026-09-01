@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const crypto = require('crypto');
+const { indexKeys, lookupVariants } = require('./keys');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -38,6 +39,19 @@ async function initSchema() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- Chaves de acesso: telefone / e-mail / nome de estudante / nome de
+    -- responsavel -> credencial. Usada pelo Portal da Familia (/acesso).
+    -- NUNCA referencia votes. Ver comentario no topo de keys.js.
+    CREATE TABLE IF NOT EXISTS voter_keys (
+      id SERIAL PRIMARY KEY,
+      voter_id INTEGER NOT NULL REFERENCES voters(id) ON DELETE CASCADE,
+      key_norm TEXT NOT NULL,
+      kind TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (voter_id, key_norm)
+    );
+    CREATE INDEX IF NOT EXISTS voter_keys_key_norm_idx ON voter_keys (key_norm);
   `);
 }
 
@@ -45,22 +59,42 @@ function newToken() {
   return crypto.randomBytes(9).toString('base64url');
 }
 
+// Indexa as chaves cruas de um eleitor (telefone/e-mail/nome). Idempotente:
+// ON CONFLICT DO NOTHING pela UNIQUE(voter_id, key_norm).
+async function insertVoterKeys(client, voterId, rawKeys) {
+  let n = 0;
+  for (const raw of rawKeys || []) {
+    for (const k of indexKeys(raw)) {
+      const kind = k.slice(0, 1) === 't' ? 'phone' : k.slice(0, 1) === 'e' ? 'email' : 'name';
+      const r = await client.query(
+        `INSERT INTO voter_keys (voter_id, key_norm, kind) VALUES ($1,$2,$3)
+         ON CONFLICT (voter_id, key_norm) DO NOTHING`,
+        [voterId, k, kind]
+      );
+      n += r.rowCount;
+    }
+  }
+  return n;
+}
+
 async function importVoters(rows) {
-  // rows: [{ name, contact, segment }]
+  // rows: [{ name, contact, segment, keys? }]
+  //   keys: array opcional de strings cruas (telefone/e-mail/nome) a indexar
+  //   no Portal da Familia.
   const client = await pool.connect();
   const results = [];
   try {
     await client.query('BEGIN');
     for (const row of rows) {
       let token = newToken();
-      let inserted = false;
-      for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
+      let voterId = null;
+      for (let attempt = 0; attempt < 5 && voterId == null; attempt++) {
         try {
-          await client.query(
-            'INSERT INTO voters (token, segment, display_name, contact) VALUES ($1,$2,$3,$4)',
+          const r = await client.query(
+            'INSERT INTO voters (token, segment, display_name, contact) VALUES ($1,$2,$3,$4) RETURNING id',
             [token, row.segment, row.name, row.contact || null]
           );
-          inserted = true;
+          voterId = r.rows[0].id;
         } catch (e) {
           if (e.code === '23505') { // unique_violation on token, retry with a fresh one
             token = newToken();
@@ -69,7 +103,10 @@ async function importVoters(rows) {
           }
         }
       }
-      results.push({ ...row, token });
+      // Chaves implicitas: o proprio contato e o proprio nome sempre entram.
+      const rawKeys = [row.contact, row.name, ...(row.keys || [])].filter(Boolean);
+      const nKeys = await insertVoterKeys(client, voterId, rawKeys);
+      results.push({ ...row, token, keysIndexed: nKeys });
     }
     await client.query('COMMIT');
   } catch (e) {
@@ -79,6 +116,46 @@ async function importVoters(rows) {
     client.release();
   }
   return results;
+}
+
+// Vincula chaves cruas a credenciais JA existentes, localizadas pelo token.
+// pairs: [{ token, keys: [rawString, ...] }]
+async function attachKeysByToken(pairs) {
+  const client = await pool.connect();
+  const out = { linked: 0, keysIndexed: 0, missing: [] };
+  try {
+    await client.query('BEGIN');
+    for (const p of pairs) {
+      const r = await client.query('SELECT id FROM voters WHERE token = $1', [p.token]);
+      if (!r.rows[0]) { out.missing.push(p.token); continue; }
+      const n = await insertVoterKeys(client, r.rows[0].id, p.keys || []);
+      out.linked += 1;
+      out.keysIndexed += n;
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+  return out;
+}
+
+// Busca do Portal da Familia. Recebe o texto cru digitado, gera as variantes
+// normalizadas e devolve os eleitores distintos que casam. Nunca toca em votes.
+async function lookupByRawKey(rawQuery) {
+  const variants = lookupVariants(rawQuery);
+  if (!variants.length) return { ok: false, reason: 'vago', voters: [] };
+  const r = await pool.query(
+    `SELECT DISTINCT v.token, v.display_name, v.segment
+       FROM voter_keys k JOIN voters v ON v.id = k.voter_id
+      WHERE k.key_norm = ANY($1)
+      ORDER BY v.display_name
+      LIMIT 8`,
+    [variants]
+  );
+  return { ok: true, voters: r.rows };
 }
 
 async function getVoterByToken(token) {
@@ -192,15 +269,28 @@ async function listIncidents() {
 
 async function resetTestData() {
   await pool.query('DELETE FROM votes');
+  await pool.query('DELETE FROM voter_keys');
   await pool.query('DELETE FROM voters');
   await pool.query('DELETE FROM incidents');
   await pool.query("DELETE FROM settings WHERE key IN ('opened_at','closed_at','published')");
+}
+
+async function keyStats() {
+  const r = await pool.query(
+    `SELECT kind, count(*)::int AS total,
+            count(DISTINCT voter_id)::int AS eleitores
+       FROM voter_keys GROUP BY kind`
+  );
+  return r.rows;
 }
 
 module.exports = {
   pool,
   initSchema,
   importVoters,
+  attachKeysByToken,
+  lookupByRawKey,
+  keyStats,
   getVoterByToken,
   castVote,
   isVotingOpen,

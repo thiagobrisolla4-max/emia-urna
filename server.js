@@ -62,6 +62,66 @@ function requireAdmin(req, res, next) {
   res.redirect('/admin');
 }
 
+// Rate limiter simples em memoria (o Render roda 1 instancia). Protege o
+// Portal da Familia de alguem tentar "adivinhar" contatos em massa.
+function makeRateLimiter(maxHits, windowMs) {
+  const hits = new Map();
+  return function limited(key) {
+    const now = Date.now();
+    const arr = (hits.get(key) || []).filter((t) => now - t < windowMs);
+    arr.push(now);
+    hits.set(key, arr);
+    if (hits.size > 5000) { // faxina preguicosa
+      for (const [k, v] of hits) if (!v.some((t) => now - t < windowMs)) hits.delete(k);
+    }
+    return arr.length > maxHits;
+  };
+}
+// Tolerante: várias famílias podem sair do mesmo wi-fi (escola, prédio).
+const acessoLimiter = makeRateLimiter(60, 15 * 60 * 1000);
+
+function maskName(s) {
+  return String(s || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w.length <= 2 ? w : w[0] + '•'.repeat(Math.min(w.length - 1, 4))))
+    .join(' ');
+}
+
+// Faz o parse do textarea de importacao. Aceita dois formatos por linha:
+//   - CSV legado:  nome,contato,segmento
+//   - TSV com chaves: display_name <TAB> segmento <TAB> contato <TAB> chave;chave;...
+// Devolve { rows: [{name, contact, segment, keys}], errors: [] }
+function parseImport(raw) {
+  const lines = String(raw || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const rows = [];
+  const errors = [];
+  const normSeg = (v) => {
+    const s = String(v || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (s.startsWith('doc')) return 'docente';
+    if (s.startsWith('fam')) return 'familia';
+    return null;
+  };
+  for (const line of lines) {
+    if (/^(nome|display_name|nome_da_familia)\b/i.test(line)) continue; // cabecalho
+    if (line.includes('\t')) {
+      const [name, segRaw, contact, keysRaw] = line.split('\t').map((p) => (p || '').trim());
+      const segment = normSeg(segRaw);
+      if (!name || !segment) { errors.push(`Linha ignorada (nome/segmento): ${line}`); continue; }
+      const keys = (keysRaw || '').split(';').map((k) => k.trim()).filter(Boolean);
+      rows.push({ name, contact: contact || '', segment, keys });
+    } else {
+      const parts = line.split(',').map((p) => p.trim());
+      if (parts.length < 3) { errors.push(`Linha ignorada (formato incorreto): ${line}`); continue; }
+      const [name, contact, segRaw] = parts;
+      const segment = normSeg(segRaw);
+      if (!segment) { errors.push(`Segmento invalido (linha ignorada): ${line}`); continue; }
+      rows.push({ name, contact, segment, keys: [] });
+    }
+  }
+  return { rows, errors };
+}
+
 // ---------- Eleitor ----------
 
 app.get('/', (req, res) => {
@@ -72,6 +132,9 @@ app.get('/', (req, res) => {
     <p>Para votar, use o link individual enviado pela Comissão Eleitoral
     (algo como <code>/votar/SEU-CODIGO</code>). Não existe uma página de
     votação genérica — cada credencial é pessoal e intransferível.</p>
+    <p><strong>Famílias:</strong> se você não recebeu ou perdeu o link, acesse
+    <a href="/acesso">/acesso</a> e informe um telefone, e-mail ou o nome
+    completo de um(a) estudante da família para chegar à sua cédula.</p>
     <p><a href="/resultados">Ver resultados</a> (disponível após a apuração).</p>
   `));
 });
@@ -108,7 +171,7 @@ app.get('/votar/:token', ah(async (req, res) => {
       <input type="radio" name="candidate_id" value="${escapeHtml(c.id)}" required>
       <span><strong>${escapeHtml(c.name)}</strong>${c.unit ? ` — ${escapeHtml(c.unit)}` : ''}</span>
     </label>
-    ${c.bio ? `<details class="bio"><summary>Ver currículo</summary><p>${escapeHtml(c.bio)}</p></details>` : ''}
+    ${c.bio ? `<details class="bio"><summary>Ver biografia de ${escapeHtml(c.name)}</summary><p>${escapeHtml(c.bio)}</p></details>` : ''}
   `).join('');
   const avisoFamilia = voter.segment === 'familia'
     ? '<p class="warn">Atenção, famílias: o voto é por família — apenas um(a) responsável deve votar por família (Edital, item 3.4.1). Confirmem entre vocês quem vai votar antes de usar este link.</p>'
@@ -154,6 +217,94 @@ app.post('/votar/:token', ah(async (req, res) => {
     <h1>Voto registrado com sucesso</h1>
     <p>Obrigado por participar da eleição do Conselho da EMIA.</p>
     <p>Registrado em: ${new Date().toLocaleString('pt-BR')}</p>
+  `));
+}));
+
+// ---------- Portal da Família (autoatendimento) ----------
+// A família recebe UM link só (/acesso). Lá a pessoa digita qualquer
+// telefone, e-mail ou o nome completo de um(a) estudante da família e é
+// levada à cédula da família. Um voto por família: se a família tem mais de
+// um estudante ou mais de um responsável, todos caem na MESMA credencial.
+
+function acessoForm(msg, valor) {
+  return `
+    <h1>Acesso à votação — Conselho EMIA</h1>
+    <p>Digite <strong>um</strong> dos dados abaixo para chegar à cédula da sua
+    família:</p>
+    <ul>
+      <li>o <strong>telefone</strong> (celular) cadastrado na EMIA, ou</li>
+      <li>o <strong>e-mail</strong> cadastrado, ou</li>
+      <li>o <strong>nome completo</strong> de um(a) estudante da família.</li>
+    </ul>
+    ${msg || ''}
+    <form method="post" action="/acesso">
+      <input type="text" name="q" required autofocus autocomplete="off"
+        placeholder="Ex.: 11 98765-4321  •  nome@email.com  •  Maria Clara da Silva"
+        value="${escapeHtml(valor || '')}">
+      <button type="submit">Buscar minha cédula</button>
+    </form>
+    <p class="warn">O voto é por família: <strong>apenas um(a) responsável</strong>
+    deve votar. Se a família tem mais de um(a) filho(a) na EMIA, ainda assim é
+    <strong>um único voto</strong> — combinem entre vocês quem vota.</p>
+    <p class="muted">Seu voto é secreto. O sistema usa seus dados só para te
+    levar à cédula certa — não há nenhuma ligação entre você e o voto que for
+    registrado.</p>
+  `;
+}
+
+app.get('/acesso', ah(async (req, res) => {
+  const s = await db.getSettings();
+  if (s.portal_off === '1') {
+    return res.send(page('Acesso', `
+      <h1>Autoatendimento indisponível</h1>
+      <p>Use o link individual enviado pela Comissão Eleitoral, ou procure a
+      Comissão para receber o seu.</p>`));
+  }
+  res.send(page('Acesso à votação', acessoForm()));
+}));
+
+app.post('/acesso', ah(async (req, res) => {
+  const s = await db.getSettings();
+  if (s.portal_off === '1') return res.redirect('/acesso');
+
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+  if (acessoLimiter(ip)) {
+    return res.status(429).send(page('Muitas tentativas', `
+      <h1>Muitas tentativas</h1>
+      <p>Aguarde alguns minutos e tente de novo, ou procure a Comissão
+      Eleitoral para receber seu link individual.</p>`));
+  }
+
+  const q = (req.body.q || '').trim();
+  const r = await db.lookupByRawKey(q);
+  if (!r.ok) {
+    return res.send(page('Acesso à votação', acessoForm(
+      `<p class="warn">Digite um telefone completo (com DDD), um e-mail
+       completo, ou o nome e sobrenome de um(a) estudante.</p>`, q)));
+  }
+  if (r.voters.length === 0) {
+    return res.send(page('Acesso à votação', acessoForm(
+      `<p class="warn">Não encontramos ninguém com esse dado. Tente outro
+       telefone/e-mail da família, ou o nome completo do(a) estudante. Se
+       nada funcionar, fale com a Comissão Eleitoral.</p>`, q)));
+  }
+  const host = req.protocol + '://' + req.get('host');
+  const cards = r.voters.map((v) => `
+    <div class="candidate" style="display:block">
+      <p style="margin:.2rem 0"><strong>${escapeHtml(SEGMENT_LABELS[v.segment] || v.segment)}</strong>
+      — ${escapeHtml(maskName(v.display_name))}</p>
+      <a href="${host}/votar/${escapeHtml(v.token)}"><button type="button">Abrir minha cédula</button></a>
+    </div>
+  `).join('');
+  res.send(page('Sua cédula', `
+    <h1>Encontramos sua credencial</h1>
+    ${r.voters.length > 1
+      ? '<p>Mais de um cadastro casou com esse dado. Escolha o seu:</p>'
+      : '<p>Confira o nome parcial abaixo e abra sua cédula.</p>'}
+    ${cards}
+    <p class="warn">Se o nome não parece ser da sua família, volte e tente com
+    outro dado. Em caso de dúvida, procure a Comissão Eleitoral.</p>
+    <p><a href="/acesso">← tentar outro dado</a></p>
   `));
 }));
 
@@ -236,6 +387,9 @@ app.get('/admin/painel', requireAdmin, ah(async (req, res) => {
   const aptosMap = Object.fromEntries(aptos.map((r) => [r.segment, r.total]));
   const votantesMap = Object.fromEntries(votantes.map((r) => [r.segment, r.total]));
   const incidents = await db.listIncidents();
+  const kstats = await db.keyStats();
+  const kmap = Object.fromEntries(kstats.map((r) => [r.kind, r]));
+  const portalOff = settings.portal_off === '1';
 
   const statusVotacao = settings.closed_at
     ? `Encerrada em ${new Date(Number(settings.closed_at)).toLocaleString('pt-BR')}`
@@ -273,12 +427,42 @@ app.get('/admin/painel', requireAdmin, ah(async (req, res) => {
     ${settings.published ? '<p>Resultados já publicados em /resultados.</p>' : ''}
 
     <h2>Importar eleitores</h2>
-    <p>Cole uma lista, uma pessoa por linha, no formato:
-    <code>nome,contato,segmento</code> (segmento = <code>docente</code> ou <code>familia</code>).</p>
+    <p>Uma pessoa/família por linha. Dois formatos aceitos:</p>
+    <ul>
+      <li><code>nome,contato,segmento</code> (simples), ou</li>
+      <li><code>nome[TAB]segmento[TAB]contato[TAB]chave;chave;chave</code>
+      (com chaves de acesso — é o que o <code>instalador.py</code> gera nos
+      arquivos <code>B_novos_eleitores.tsv</code>).</li>
+    </ul>
+    <p>As <em>chaves</em> são telefones, e-mails e nomes de estudantes/responsáveis
+    que levam ao Portal da Família (<code>/acesso</code>). O próprio nome e o
+    próprio contato já viram chave automaticamente.</p>
     <form method="post" action="/admin/importar">
       <textarea name="csv" rows="8" style="width:100%" placeholder="Maria Silva,11999999999,docente
-João Souza,joao@email.com,familia"></textarea>
+Família de João e Ana Souza&#9;familia&#9;11988887777&#9;11988887777;joao@email.com;João Pedro Souza;Ana Clara Souza"></textarea>
       <button type="submit">Importar e gerar credenciais</button>
+    </form>
+
+    <h2>Vincular chaves a credenciais já existentes</h2>
+    <p>Para as credenciais que já foram geradas antes (arquivo
+    <code>A_chaves_para_tokens_existentes.tsv</code> do instalador). Uma por
+    linha: <code>TOKEN[TAB]chave;chave;chave</code>. Não gera credencial nova,
+    só acrescenta chaves de acesso. Rodar de novo é seguro (não duplica).</p>
+    <form method="post" action="/admin/vincular-chaves">
+      <textarea name="pares" rows="6" style="width:100%" placeholder="B3PLmdWNz27g&#9;11957569998;maria@email.com;Pedro Henrique Antunes"></textarea>
+      <button type="submit">Vincular chaves</button>
+    </form>
+
+    <h2>Portal da Família (/acesso)</h2>
+    <p>Chaves indexadas:
+      <strong>${kmap.phone?.total || 0}</strong> telefones,
+      <strong>${kmap.email?.total || 0}</strong> e-mails,
+      <strong>${kmap.name?.total || 0}</strong> nomes
+      — cobrindo <strong>${Math.max(kmap.phone?.eleitores || 0, kmap.email?.eleitores || 0, kmap.name?.eleitores || 0)}</strong> credenciais.</p>
+    <p>Status: <strong>${portalOff ? 'DESLIGADO' : 'LIGADO'}</strong>
+      (<a href="/acesso" target="_blank" rel="noopener">abrir /acesso</a>)</p>
+    <form method="post" action="/admin/portal-toggle">
+      <button type="submit">${portalOff ? 'Ligar' : 'Desligar'} o portal</button>
     </form>
 
     <h2>Lista de eleitores e credenciais</h2>
@@ -352,28 +536,38 @@ app.post('/admin/publicar', requireAdmin, ah(async (req, res) => {
 }));
 
 app.post('/admin/importar', requireAdmin, ah(async (req, res) => {
-  const raw = (req.body.csv || '').trim();
-  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const rows = [];
-  const errors = [];
-  for (const line of lines) {
-    const parts = line.split(',').map((p) => p.trim());
-    if (parts.length < 3) { errors.push(`Linha ignorada (formato incorreto): ${line}`); continue; }
-    const [name, contact, segmentRaw] = parts;
-    const segNorm = segmentRaw.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-    let segment = null;
-    if (segNorm.startsWith('doc')) segment = 'docente';
-    else if (segNorm.startsWith('fam')) segment = 'familia';
-    if (!segment) { errors.push(`Segmento inválido (linha ignorada): ${line}`); continue; }
-    rows.push({ name, contact, segment });
-  }
+  const { rows, errors } = parseImport(req.body.csv || '');
   const imported = rows.length ? await db.importVoters(rows) : [];
+  const totalKeys = imported.reduce((s, r) => s + (r.keysIndexed || 0), 0);
   res.send(page('Importação concluída', `
     <h1>Importação concluída</h1>
-    <p>${imported.length} eleitor(es) importado(s).</p>
+    <p>${imported.length} eleitor(es) importado(s). ${totalKeys} chave(s) de acesso indexada(s).</p>
     ${errors.length ? `<p class="warn">${errors.length} linha(s) com problema:</p><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>` : ''}
     <p><a href="/admin/painel">Voltar ao painel</a> —
     <a href="/admin/credenciais.csv">Baixar credenciais</a></p>
+  `));
+}));
+
+app.post('/admin/vincular-chaves', requireAdmin, ah(async (req, res) => {
+  // Uma linha por credencial ja existente:  TOKEN <TAB> chave;chave;chave
+  const lines = String(req.body.pares || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const pairs = [];
+  const errors = [];
+  for (const line of lines) {
+    const cut = line.indexOf('\t') >= 0 ? line.indexOf('\t') : line.indexOf(',');
+    const token = (cut >= 0 ? line.slice(0, cut) : line).trim();
+    const keysRaw = cut >= 0 ? line.slice(cut + 1) : '';
+    if (!token) { errors.push(`Linha sem token: ${line}`); continue; }
+    const keys = keysRaw.split(';').map((k) => k.trim()).filter(Boolean);
+    pairs.push({ token, keys });
+  }
+  const out = pairs.length ? await db.attachKeysByToken(pairs) : { linked: 0, keysIndexed: 0, missing: [] };
+  res.send(page('Chaves vinculadas', `
+    <h1>Chaves vinculadas</h1>
+    <p>${out.linked} credencial(is) atualizada(s), ${out.keysIndexed} chave(s) nova(s) indexada(s).</p>
+    ${out.missing.length ? `<p class="warn">${out.missing.length} token(s) não encontrado(s):</p><ul>${out.missing.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>` : ''}
+    ${errors.length ? `<p class="warn">${errors.length} linha(s) com problema:</p><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>` : ''}
+    <p><a href="/admin/painel">Voltar ao painel</a></p>
   `));
 }));
 
@@ -454,6 +648,12 @@ app.post('/admin/ocorrencia', requireAdmin, ah(async (req, res) => {
 
 app.post('/admin/zerar', requireAdmin, ah(async (req, res) => {
   await db.resetTestData();
+  res.redirect('/admin/painel');
+}));
+
+app.post('/admin/portal-toggle', requireAdmin, ah(async (req, res) => {
+  const s = await db.getSettings();
+  await db.setSetting('portal_off', s.portal_off === '1' ? '0' : '1');
   res.redirect('/admin/painel');
 }));
 
