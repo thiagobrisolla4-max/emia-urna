@@ -440,6 +440,12 @@ app.get('/admin/painel', requireAdmin, ah(async (req, res) => {
     <form method="post" action="/admin/importar">
       <textarea name="csv" rows="8" style="width:100%" placeholder="Maria Silva,11999999999,docente
 Família de João e Ana Souza&#9;familia&#9;11988887777&#9;11988887777;joao@email.com;João Pedro Souza;Ana Clara Souza"></textarea>
+      <label style="display:block;margin:.6em 0">
+        <input type="checkbox" name="replace_docente" value="1">
+        <strong>Substituir os docentes</strong>: apaga os docentes já cadastrados
+        antes de importar (use ao reenviar a lista de docentes corrigida).
+        Não afeta as famílias. Bloqueado se algum docente já votou.
+      </label>
       <button type="submit">Importar e gerar credenciais</button>
     </form>
 
@@ -537,10 +543,28 @@ app.post('/admin/publicar', requireAdmin, ah(async (req, res) => {
 
 app.post('/admin/importar', requireAdmin, ah(async (req, res) => {
   const { rows, errors } = parseImport(req.body.csv || '');
-  const imported = rows.length ? await db.importVoters(rows) : [];
+  const replaceSegment = req.body.replace_docente ? 'docente' : null;
+
+  if (replaceSegment && rows.length === 0) {
+    return res.status(400).send(page('Importação não feita', `
+      <h1>Nada foi alterado</h1>
+      <p class="warn">Você marcou "substituir os docentes" mas não colou nenhuma
+      linha. Cole a lista corrigida de docentes e envie de novo.</p>
+      <p><a href="/admin/painel">Voltar ao painel</a></p>
+    `));
+  }
+
+  let imported = [];
+  let removed = 0;
+  if (rows.length || replaceSegment) {
+    const r = await db.importVoters(rows, { replaceSegment });
+    imported = r.results;
+    removed = r.removed;
+  }
   const totalKeys = imported.reduce((s, r) => s + (r.keysIndexed || 0), 0);
   res.send(page('Importação concluída', `
     <h1>Importação concluída</h1>
+    ${removed ? `<p class="warn">${removed} docente(s) que já estavam cadastrados foram removidos antes de importar. As famílias não foram tocadas.</p>` : ''}
     <p>${imported.length} eleitor(es) importado(s). ${totalKeys} chave(s) de acesso indexada(s).</p>
     ${errors.length ? `<p class="warn">${errors.length} linha(s) com problema:</p><ul>${errors.map((e) => `<li>${escapeHtml(e)}</li>`).join('')}</ul>` : ''}
     <p><a href="/admin/painel">Voltar ao painel</a> —

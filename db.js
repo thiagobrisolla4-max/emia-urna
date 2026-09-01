@@ -77,14 +77,32 @@ async function insertVoterKeys(client, voterId, rawKeys) {
   return n;
 }
 
-async function importVoters(rows) {
+async function importVoters(rows, opts = {}) {
   // rows: [{ name, contact, segment, keys? }]
   //   keys: array opcional de strings cruas (telefone/e-mail/nome) a indexar
   //   no Portal da Familia.
+  // opts.replaceSegment: se setado (ex. 'docente'), APAGA todos os eleitores
+  //   desse segmento ANTES de importar, na mesma transacao. Aborta (rollback)
+  //   se algum eleitor desse segmento ja votou.
   const client = await pool.connect();
   const results = [];
+  let removed = 0;
   try {
     await client.query('BEGIN');
+    if (opts.replaceSegment) {
+      const seg = opts.replaceSegment;
+      const voted = await client.query(
+        'SELECT count(*)::int AS n FROM voters WHERE segment = $1 AND has_voted = TRUE',
+        [seg]
+      );
+      if (voted.rows[0].n > 0) {
+        throw new Error(
+          `${voted.rows[0].n} eleitor(es) do segmento "${seg}" ja votaram — substituicao abortada, nada foi alterado.`
+        );
+      }
+      const del = await client.query('DELETE FROM voters WHERE segment = $1', [seg]);
+      removed = del.rowCount; // voter_keys cai por ON DELETE CASCADE; votos sao anonimos
+    }
     for (const row of rows) {
       let token = newToken();
       let voterId = null;
@@ -115,7 +133,7 @@ async function importVoters(rows) {
   } finally {
     client.release();
   }
-  return results;
+  return { results, removed };
 }
 
 // Vincula chaves cruas a credenciais JA existentes, localizadas pelo token.
