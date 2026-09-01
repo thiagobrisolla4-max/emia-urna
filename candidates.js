@@ -3,6 +3,8 @@
 // Familias (incluindo Angelica de Aguiar Tozzo, ausente na 1a versao deste
 // arquivo) conferidas em 26/08/2026 contra o PDF de candidatos da edicao 2026.
 // A fase de recursos (20-24/08/2026) ja passou; esta lista e definitiva.
+// Luciana de Lima Gabriel (EMIA Jabaquara) desistiu da candidatura em
+// 31/08/2026 (confirmado por Thiago/Comissao) e foi removida da cedula.
 
 const REAL_CANDIDATES = {
   docente: [
@@ -13,10 +15,6 @@ const REAL_CANDIDATES = {
     {
       id: 'doc-2', name: 'Carmem Soares', unit: 'EMIA Parelheiros',
       bio: 'Carmen Pinheiro da Silva é mestra em Arte Educação pela Unesp e possui bacharelado e licenciatura em Artes Cênicas pela Faculdade Paulista de Teatro. É atriz, diretora e professora de Teatro. Mora em Parelheiros e atua como professora na Associação Comunitária Pequeno Príncipe e na EMIA Parelheiros.',
-    },
-    {
-      id: 'doc-3', name: 'Luciana de Lima Gabriel', unit: 'EMIA Jabaquara',
-      bio: 'Atriz, artista educadora, produtora cultural e pesquisadora teatral. É mestre em Artes pela USP, bacharel em Artes Cênicas pela Unicamp e licenciada em Artes pela Faculdade IBRA. Atualmente se especializa em Neurociência na Educação pelo Instituto Singularidades. Integra o corpo docente da EMIA Jabaquara desde 2017. Desde 2021, integra o núcleo artístico da Cia. Madeirite Rosa, atuando e produzindo nos espetáculos da companhia.',
     },
     {
       id: 'doc-4', name: 'Maristely Souza da Silva', unit: 'EMIA Chácara do Jockey',

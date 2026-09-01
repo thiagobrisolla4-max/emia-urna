@@ -1,2 +1,11 @@
 node_modules/
 .env
+
+# Dados pessoais de alunos/responsaveis (PII) - nunca versionar.
+# Fontes brutas usadas para montar a lista de eleitores; ficam so localmente.
+*.xlsx
+*.xls
+AUTORIZA*.pdf
+Dados alunos*.pdf
+credenciais*.csv
+eleitores_familia*.csv
