@@ -19,3 +19,6 @@ relatorios/
 # Saida do instalador serial (instalador.py) - contem PII (nomes de criancas,
 # telefones, e-mails). Nunca versionar.
 saida_instalador/
+
+# previa local da cedula (helper de dev, embute fotos)
+previa-cedula.html

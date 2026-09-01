@@ -17,24 +17,26 @@ body {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.55;
+  font-size: 18px;
 }
 
 .wrap {
   max-width: 720px;
   margin: 0 auto;
-  padding: 24px 16px 64px;
+  padding: 28px 18px 72px;
 }
 
-h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-h2 { font-size: 1.15rem; margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+h1 { font-size: 1.75rem; margin-bottom: 0.5rem; line-height: 1.2; }
+h2 { font-size: 1.25rem; margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+p { font-size: 1.02rem; }
 
 .warn {
   background: var(--warn-bg);
   border: 1px solid var(--warn-border);
   border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 0.95rem;
+  padding: 12px 16px;
+  font-size: 1rem;
 }
 
 .muted { color: var(--muted); font-size: 0.85rem; }
@@ -56,9 +58,9 @@ label {
 .candidate {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 12px 14px;
   margin-bottom: 10px;
   cursor: pointer;
@@ -67,6 +69,29 @@ label {
   border-color: var(--accent);
   background: #f5f0ff;
 }
+.candidate input[type="radio"] {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+.cand-foto {
+  flex: none;
+  width: 76px;
+  height: 95px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #ededed;
+}
+.cand-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.cand-info strong { font-size: 1.1rem; line-height: 1.25; }
+.cand-unit { color: var(--muted); font-size: 0.92rem; }
 
 details.bio {
   margin: -4px 0 16px 14px;

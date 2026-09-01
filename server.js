@@ -169,7 +169,8 @@ app.get('/votar/:token', ah(async (req, res) => {
   const options = candidates.map((c) => `
     <label class="candidate">
       <input type="radio" name="candidate_id" value="${escapeHtml(c.id)}" required>
-      <span><strong>${escapeHtml(c.name)}</strong>${c.unit ? ` — ${escapeHtml(c.unit)}` : ''}</span>
+      ${c.photo ? `<img class="cand-foto" src="${escapeHtml(c.photo)}" alt="Foto de ${escapeHtml(c.name)}" width="76" height="95" loading="lazy">` : ''}
+      <span class="cand-info"><strong>${escapeHtml(c.name)}</strong>${c.unit ? `<span class="cand-unit">${escapeHtml(c.unit)}</span>` : ''}</span>
     </label>
     ${c.bio ? `<details class="bio"><summary>Ver biografia de ${escapeHtml(c.name)}</summary><p>${escapeHtml(c.bio)}</p></details>` : ''}
   `).join('');
