@@ -36,7 +36,7 @@ from pathlib import Path
 
 from instalador import (
     clean_name, clean_email, clean_phone, phone_variants,
-    norm_name_key, group_families, dedup, PARTICULAS,
+    norm_name_key, group_families, dedup, strip_acc, PARTICULAS,
 )
 
 BASE = Path(__file__).resolve().parent
@@ -50,9 +50,16 @@ BLOCO = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 #   2 = NASC  3 = IDADE/turma  4 = RG  5 = CPF
 #   6 = TELEFONE 1 (pode ter vários números + nomes grudados)
 #   7 = E-MAIL
-COL_CRIANCA, COL_TEL, COL_EMAIL = 1, 6, 7
+COL_CRIANCA, COL_TURMA, COL_TEL, COL_EMAIL = 1, 3, 6, 7
 
 PHONE_RE = re.compile(r"\(?\d{2}\)?\s*9?\d{4,5}[-.\s]?\d{4}|\b\d{10,11}\b")
+
+# palavras que não são nome de responsável (parentesco / lixo de célula)
+RESP_STOP = {
+    "mae", "pai", "avo", "avó", "avô", "tia", "tio", "tias", "tios", "vo", "vó",
+    "responsavel", "resp", "mãe", "e", "de", "da", "do", "das", "dos",
+    "contato", "cel", "tel", "whatsapp", "zap", "recado", "trabalho",
+}
 
 
 def titlecase_soft(nome):
@@ -70,7 +77,13 @@ def titlecase_soft(nome):
 
 
 def split_phones_and_names(cell):
-    """Devolve (telefones_limpos, nomes_de_responsavel_crus)."""
+    """Devolve (telefones_limpos, (nomes_de_responsavel, telefones_suspeitos)).
+
+    O campo TELEFONE da planilha de Jabaquara mistura vários números e o
+    primeiro nome de quem atende, muitas vezes grudado:
+      '(11) 97976-3197 - Rubia(11) 97976-3112Rúbia'
+    Aqui separo os dois: números viram chave de telefone; os trechos de texto
+    ENTRE os números viram nome de responsável (parcial, como veio)."""
     raw = "" if cell is None else str(cell)
     raw = raw.replace("\xa0", " ").replace("\n", " ").strip()
     if not raw or raw.lower() in ("none", "nan", "-"):
@@ -82,17 +95,14 @@ def split_phones_and_names(cell):
             phones.append(d)
             if motivo:
                 suspeitos.append((m, d, motivo))
-    # o que sobra depois de tirar os telefones costuma ser o 1º nome do
-    # responsável ("- Rubia", "Cleide", "José") — serve só p/ conferência
-    leftover = PHONE_RE.sub(" ", raw)
-    leftover = re.sub(r"\(.*?\)", " ", leftover)  # tira "(mãe)", "(pai)"...
     nomes = []
-    for tok in re.split(r"[^A-Za-zÀ-ÖØ-öø-ÿ']+", leftover):
-        tl = tok.strip("'")
-        if len(tl) >= 3 and tl.lower() not in (
-            "mae", "pai", "avo", "avó", "tia", "tio", "mãe", "responsavel",
-        ):
-            nomes.append(tl[:1].upper() + tl[1:].lower())
+    for piece in PHONE_RE.split(raw):
+        piece = re.sub(r"\(.*?\)", " ", piece)                     # (mãe)/(pai)
+        piece = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ' ]+", " ", piece)       # '-', dígitos
+        toks = [t for t in piece.split()
+                if len(t) >= 2 and strip_acc(t).lower() not in RESP_STOP]
+        if toks:
+            nomes.append(" ".join(t[:1].upper() + t[1:].lower() for t in toks))
     return dedup(phones), (dedup(nomes), suspeitos)
 
 
@@ -106,6 +116,7 @@ def load_rows():
         if not r or r[COL_CRIANCA] in (None, ""):
             continue
         crianca = titlecase_soft(clean_name(r[COL_CRIANCA]))
+        turma = re.sub(r"\s+", "", str(r[COL_TURMA] or "").upper()) or "?"
         phones, (resp_names, ph_susp) = split_phones_and_names(r[COL_TEL])
         emails = []
         for chunk in re.split(r"[,;\s]+", str(r[COL_EMAIL] or "")):
@@ -117,37 +128,46 @@ def load_rows():
         rows.append(dict(
             unidade=UNIDADE,
             children=[crianca] if crianca else [],
-            responsibles=[n for n in resp_names if len(n.split()) >= 2],  # só nomes completos viram chave
+            responsibles=[n for n in resp_names if len(n.split()) >= 2],  # só nome completo vira chave
             phones=phones,
             emails=dedup(emails),
             _src=SRC.name, _trusted=True,
             _phone_raw=[str(r[COL_TEL] or "")],
-            _resp_frag=resp_names,          # primeiros nomes crus, p/ conferência
+            _resp_frag=resp_names,          # nomes como vieram (parciais), p/ conferência
+            _turma=turma,
         ))
         for orig, limpo, motivo in ph_susp:
             susp.append([UNIDADE, crianca, orig, limpo, motivo])
     return rows, susp
 
 
-# sobrenomes comuns demais p/ servir de "assinatura de família" sozinhos
+# sobrenomes comuns demais (ou sufixos) p/ servir de "assinatura de família"
+# sozinhos — a assinatura só vale se tiver ALGO fora desta lista.
 SOBRENOMES_COMUNS = {
     "silva", "santos", "oliveira", "souza", "sousa", "lima", "costa", "pereira",
     "rodrigues", "almeida", "nascimento", "gomes", "ribeiro", "carvalho",
     "ferreira", "martins", "araujo", "rocha", "alves", "barbosa", "cardoso",
     "dias", "cruz", "moraes", "moreira", "nunes", "mendes", "freitas", "teixeira",
+    "reis", "vieira", "correia", "pinto", "ramos", "monteiro", "batista",
+    "cavalcante", "campos", "castro", "andrade", "machado", "barros", "melo",
+    "neto", "filho", "junior", "sobrinho",   # sufixos de nome, não identificam
 }
 
 
 def surname_sig(children):
-    """Assinatura de sobrenome p/ alertar 'irmão em credencial separada'.
-    Usa os 2 últimos sobrenomes de cada criança, tirando os comuns demais;
-    só vira assinatura se sobrar pelo menos 2 tokens distintos."""
+    """Assinatura de sobrenome p/ juntar irmãos que ficaram em credenciais
+    separadas (contatos diferentes). Pega os 2 últimos sobrenomes de cada
+    criança. Só vale como assinatura se houver >=2 sobrenomes distintos E
+    pelo menos 1 deles for incomum (senão 'Alves Silva' juntaria meio mundo).
+    A assinatura em si é o conjunto COMPLETO de sobrenomes — duas famílias só
+    se juntam se compartilharem exatamente o mesmo conjunto."""
     toks = []
     for c in children:
         parts = [p for p in norm_name_key(c).split() if p not in PARTICULAS]
-        toks += [p for p in parts[-2:] if p not in SOBRENOMES_COMUNS]
+        toks += parts[-2:]
     uniq = sorted(set(toks))
-    return " ".join(uniq) if len(uniq) >= 2 else ""
+    incomuns = [t for t in uniq if t not in SOBRENOMES_COMUNS]
+    return " ".join(uniq) if (len(uniq) >= 2 and incomuns) else ""
 
 
 def _rebuild_display(children, resps, phones):
@@ -193,6 +213,67 @@ def merge_by_surname(fams):
     return out, merges
 
 
+def enrich_from_rows(fams, rows):
+    """group_families descarta turma e nomes parciais de responsável. Aqui
+    re-associo cada linha original à sua família (por telefone/e-mail/nome de
+    criança) e devolvo turma + nomes parciais de volta, só p/ conferência."""
+    by_phone, by_email, by_child = {}, {}, {}
+    for i, f in enumerate(fams):
+        for p in f["phones"]:
+            for v in phone_variants(p):
+                by_phone[v] = i
+        for e in f["emails"]:
+            by_email[e] = i
+        for c in f["children"]:
+            k = norm_name_key(c)
+            if k:
+                by_child[k] = i
+        f["_turmas"], f["_resp_parciais"] = set(), []
+    for r in rows:
+        idx = None
+        for p in r["phones"]:
+            for v in phone_variants(p):
+                idx = by_phone.get(v, idx)
+        for e in r["emails"]:
+            idx = by_email.get(e, idx)
+        for c in r["children"]:
+            idx = by_child.get(norm_name_key(c), idx)
+        if idx is None:
+            continue
+        fams[idx]["_turmas"].add(r.get("_turma", "?"))
+        fams[idx]["_resp_parciais"] += r.get("_resp_frag", [])
+    for f in fams:
+        f["_turmas"] = " ".join(sorted(t for t in f["_turmas"] if t and t != "?"))
+        f["_resp_parciais"] = " | ".join(dedup(f["_resp_parciais"]))
+
+
+def sibling_review(fams):
+    """Rede de segurança MANUAL: qualquer par de famílias cujas crianças
+    compartilhem 2+ sobrenomes (inclui os comuns) e que ficaram em
+    credenciais separadas. Não junta nada — só lista p/ olho humano."""
+    def sig(children):
+        toks = []
+        for c in children:
+            parts = [p for p in norm_name_key(c).split() if p not in PARTICULAS]
+            toks += parts[-2:]
+        u = sorted(set(toks))
+        return " ".join(u) if len(u) >= 2 else ""
+    grp = defaultdict(list)
+    for f in fams:
+        s = sig(f["children"])
+        if s:
+            grp[s].append(f)
+    linhas = []
+    for s, lst in sorted(grp.items()):
+        if len(lst) < 2:
+            continue
+        for f in lst:
+            linhas.append([s, f["_turmas"], f["display"],
+                           " | ".join(f["children"]),
+                           " | ".join(f["phones"]), " | ".join(f["emails"])])
+    return linhas
+
+
 def main():
     if not SRC.exists():
         sys.exit(f"ERRO: não achei {SRC.name} nesta pasta.")
@@ -202,13 +283,16 @@ def main():
     print(f"[1] linhas de aluno lidas: {len(rows)}")
 
     fams = group_families(rows)
-    print(f"[2] famílias após telefone/e-mail: {len(fams)}")
+    print(f"[2] famílias após telefone/e-mail/nome: {len(fams)}")
     fams, merges = merge_by_surname(fams)
     fams.sort(key=lambda f: norm_name_key(f["display"]))
+    enrich_from_rows(fams, rows)
     print(f"[3] famílias após juntar irmãos por sobrenome: {len(fams)} "
           f"({len(merges)} junções)")
     for novo, partes in merges:
         print(f"    juntou: {' + '.join(partes)}  ->  {novo}")
+
+    revisar = sibling_review(fams)
 
     # após as duas passadas, ainda pode sobrar irmão não pego (sobrenome muito
     # comum). O que restar com assinatura repetida vai como alerta p/ conferência.
@@ -242,16 +326,25 @@ def main():
     # ---- conferência humana (Excel) ----
     with (OUT / "JABAQUARA_conferencia.csv").open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["bloco", "unidade", "display_name", "n_criancas", "criancas",
-                    "responsaveis_chave", "telefones", "emails", "alerta"])
+        w.writerow(["bloco", "unidade", "turmas", "display_name", "n_criancas",
+                    "criancas", "responsaveis_completos_chave",
+                    "responsaveis_parciais_planilha", "telefones", "emails",
+                    "alerta"])
         for i, f in enumerate(fams):
             w.writerow([
-                i // BLOCO + 1, f["unidade"], f["display"], len(f["children"]),
-                " | ".join(f["children"]),
-                " | ".join(f["responsibles"]),
+                i // BLOCO + 1, f["unidade"], f.get("_turmas", ""), f["display"],
+                len(f["children"]), " | ".join(f["children"]),
+                " | ".join(f["responsibles"]), f.get("_resp_parciais", ""),
                 " | ".join(f["phones"]), " | ".join(f["emails"]),
                 alerta.get(id(f), ""),
             ])
+
+    # ---- rede de segurança: possíveis irmãos em credenciais separadas ----
+    with (OUT / "JABAQUARA_revisar_irmaos.csv").open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["assinatura_sobrenome", "turmas", "display_name",
+                    "criancas", "telefones", "emails"])
+        w.writerows(revisar)
 
     with (OUT / "JABAQUARA_telefones_suspeitos.csv").open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
@@ -264,13 +357,26 @@ def main():
     p("=" * 66)
     p("  URNA EMIA - JABAQUARA - RESUMO")
     p("=" * 66)
+    from collections import Counter as _C
+    turmas = _C()
+    for f in fams:
+        for t in (f.get("_turmas", "") or "?").split():
+            turmas[t] += 1
     p(f"  Linhas de aluno lidas ............... {len(rows)}")
     p(f"  Familias distintas (credenciais) ... {len(fams)}")
     p(f"  Juncoes de irmaos por sobrenome .... {len(merges)}")
     p(f"  Tamanho do bloco ................... {BLOCO}")
     p(f"  Numero de blocos .................. {nblocos}")
-    p(f"  Alertas 'possivel irmao separado' .. {len(alerta)}  (ver JABAQUARA_conferencia.csv)")
+    p(f"  Linhas marcadas na conferencia ..... {len(alerta)}  (col 'alerta')")
+    p(f"  Familias p/ revisao manual de irmaos {len(revisar)} linhas  (JABAQUARA_revisar_irmaos.csv)")
     p(f"  Telefones suspeitos ............... {len(suspeitos)}")
+    p("")
+    p("  FAMILIAS POR TURMA (col IDADE da planilha):")
+    for t, n in sorted(turmas.items()):
+        p(f"    {t:6s} {n}")
+    if turmas.get("FORM"):
+        p(f"  >> {turmas['FORM']} familias marcadas 'FORM' (formandos?). A Comissao")
+        p("     precisa decidir se essas familias votam antes de abrir a urna.")
     if merges:
         p("")
         p("  IRMAOS JUNTADOS NA 2a PASSADA (confira no conferencia.csv):")
@@ -286,9 +392,10 @@ def main():
     p("   5. Testar /acesso com 2-3 nomes de crianca e telefones reais de Jabaquara.")
     p("")
     p("  ARQUIVOS (em ./saida_instalador/):")
-    p("   JABAQUARA_bloco_NN.tsv .......... colar no painel, um de cada vez")
-    p("   JABAQUARA_completo.tsv ......... tudo junto (caso queira colar de uma vez)")
-    p("   JABAQUARA_conferencia.csv ..... abrir no Excel e revisar os 'alerta'")
+    p("   JABAQUARA_bloco_NN.tsv ......... colar no painel, um de cada vez")
+    p("   JABAQUARA_completo.tsv ........ tudo junto (caso queira colar de uma vez)")
+    p("   JABAQUARA_conferencia.csv .... abrir no Excel; revisar coluna 'alerta'")
+    p("   JABAQUARA_revisar_irmaos.csv . pares de familias c/ mesmo sobrenome")
     p("   JABAQUARA_telefones_suspeitos.csv")
     (OUT / "JABAQUARA_RESUMO.txt").write_text(r.getvalue(), encoding="utf-8-sig")
     sys.stdout.write(r.getvalue())
