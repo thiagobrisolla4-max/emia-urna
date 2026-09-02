@@ -9,6 +9,35 @@ const { candidatesFor, candidateById, isValidSegment, SEGMENT_LABELS } = require
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 
+// ---------- Janela oficial de votação ----------
+// Fonte única da verdade para os textos de prazo mostrados ao eleitor. A
+// lógica de abrir/encerrar continua sendo o clique da Comissão no painel
+// (settings.opened_at / closed_at); isto aqui NÃO fecha nada sozinho — só
+// informa o prazo e destaca a prorrogação. Se houver nova prorrogação,
+// mude só este bloco e faça o deploy (o histórico do git serve de registro).
+const JANELA = {
+  inicio: '31/08/2026',
+  fim: '08/09/2026',
+  diaSemana: 'terça-feira',
+  horaLimite: '12h',
+  limiteISO: '2026-09-08T12:00:00-03:00', // 12h de Brasília (America/Sao_Paulo)
+  // Data anterior, antes da prorrogação. Deixe '' se nunca houve prorrogação.
+  prorrogadoDe: '05/09/2026',
+};
+
+function janelaTexto() {
+  return `${JANELA.inicio} a ${JANELA.fim}, até ${JANELA.horaLimite}`;
+}
+
+// Aviso curto de prorrogação para as páginas que o eleitor vê.
+function avisoProrrogacao() {
+  if (!JANELA.prorrogadoDe) return '';
+  return `<p class="warn"><strong>Prazo prorrogado:</strong> a votação foi
+    estendida até <strong>${JANELA.fim} (${JANELA.diaSemana}), às
+    ${JANELA.horaLimite}</strong> — antes era ${JANELA.prorrogadoDe}. Quem
+    ainda não votou pode votar normalmente até lá.</p>`;
+}
+
 // Envolve uma rota async: erros vao para o middleware de erro em vez de
 // derrubar o processo ou deixar a requisicao pendurada.
 function ah(fn) {
@@ -129,6 +158,8 @@ app.get('/', (req, res) => {
     <h1>Urna Eletrônica — Conselho EMIA</h1>
     <p>Este é o sistema de votação da eleição do Conselho da Escola Municipal
     de Iniciação Artística (biênio 2026-2028).</p>
+    <p>Período oficial de votação: <strong>${janelaTexto()}</strong>.</p>
+    ${avisoProrrogacao()}
     <p>Para votar, use o link individual enviado pela Comissão Eleitoral
     (algo como <code>/votar/SEU-CODIGO</code>). Não existe uma página de
     votação genérica — cada credencial é pessoal e intransferível.</p>
@@ -159,12 +190,18 @@ app.get('/votar/:token', ah(async (req, res) => {
   }
   const open = await db.isVotingOpen();
   if (!open) {
-    return res.send(page('Votação fechada', `
-      <h1>Votação não está aberta</h1>
-      <p>A votação ainda não começou ou já foi encerrada pela Comissão
-      Eleitoral. Guarde este link para usar durante o período oficial de
-      votação (31/08 a 05/09/2026, até 12h).</p>
-    `));
+    const s = await db.getSettings();
+    const encerrada = Boolean(s.closed_at);
+    return res.send(page('Votação fechada', encerrada
+      ? `<h1>Votação encerrada</h1>
+         <p>A votação foi encerrada pela Comissão Eleitoral em
+         ${new Date(Number(s.closed_at)).toLocaleString('pt-BR')}. Não é mais
+         possível registrar votos por este link.</p>`
+      : `<h1>Votação ainda não começou</h1>
+         <p>A votação ainda não foi aberta pela Comissão Eleitoral. Guarde
+         este link para o período oficial de votação
+         (${janelaTexto()}).</p>
+         ${avisoProrrogacao()}`));
   }
   const candidates = candidatesFor(voter.segment);
   const options = candidates.map((c) => `
@@ -234,6 +271,7 @@ app.post('/votar/:token', ah(async (req, res) => {
 function acessoForm(msg, valor) {
   return `
     <h1>Acesso à votação — Conselho EMIA</h1>
+    ${avisoProrrogacao()}
     <p>Esta página é para <strong>todo mundo que vai votar</strong> — famílias
     <strong>e docentes</strong> — que não recebeu ou perdeu o link individual.
     Digite <strong>um</strong> dos dados abaixo e o sistema leva você à sua
@@ -413,12 +451,28 @@ app.get('/admin/painel', requireAdmin, ah(async (req, res) => {
       ? `Aberta desde ${new Date(Number(settings.opened_at)).toLocaleString('pt-BR')}`
       : 'Não iniciada';
 
+  const limiteMs = Date.parse(JANELA.limiteISO);
+  const passouDoLimite = Number.isFinite(limiteMs)
+    && Date.now() > limiteMs && settings.opened_at && !settings.closed_at;
+  const linhaProrrogacao = JANELA.prorrogadoDe
+    ? `<br><em>Prorrogação registrada: prazo anterior era ${JANELA.prorrogadoDe}.</em>`
+    : '';
+  const avisoPassouLimite = passouDoLimite
+    ? '<p class="warn"><strong>Atenção:</strong> já passou do horário-limite oficial e a votação continua aberta. Encerre a votação e faça a apuração.</p>'
+    : '';
+
   res.send(page('Painel da Comissão', `
     <h1>Painel da Comissão Eleitoral</h1>
     <form method="post" action="/admin/logout" style="display:inline"><button>Sair</button></form>
 
     <h2>Status da votação</h2>
     <p>${escapeHtml(statusVotacao)}</p>
+    <p>Janela oficial: <strong>${janelaTexto()}</strong>
+      (limite: ${JANELA.fim} ${JANELA.diaSemana}, ${JANELA.horaLimite} de Brasília).
+      ${linhaProrrogacao}</p>
+    ${avisoPassouLimite}
+    <p class="muted">A votação não fecha sozinha — ela só encerra quando a
+    Comissão clicar em "Encerrar votação agora".</p>
     <form method="post" action="/admin/abrir" style="display:inline">
       <button ${settings.opened_at ? 'disabled' : ''}>Abrir votação agora</button>
     </form>

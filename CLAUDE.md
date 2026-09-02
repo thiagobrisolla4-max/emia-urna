@@ -10,7 +10,10 @@ Sistema de votação online (urna eletrônica) pra eleição do Conselho da EMIA
 (Escola Municipal de Iniciação Artística), biênio 2026-2028. Thiago é membro
 da Comissão Eleitoral, autorizado a fazer a auditoria do processo.
 
-Votação oficial: **31/08/2026 a 05/09/2026, até 12h**.
+Votação oficial: **31/08/2026 a 08/09/2026 (terça), até 12h** — prazo
+prorrogado pela Comissão em 02/09/2026 (era 05/09). O texto do prazo
+mostrado ao eleitor mora em `JANELA`, no topo do `server.js`; a votação só
+encerra de fato quando a Comissão clica em "Encerrar votação agora".
 
 ## Por que existe
 

@@ -153,7 +153,7 @@ em `/admin`, substitua o `credenciais-emia.csv` local, adicione o arquivo
 novo em `SRC_FAMILIA_XLSX` no topo do `instalador.py`, rode de novo e cole
 os `A_`/`B_` outra vez — famílias já importadas não duplicam.
 
-## 4. No encerramento (05/09/2026, até 12h)
+## 4. No encerramento (08/09/2026, terça, até 12h — prazo prorrogado; era 05/09)
 
 1. Clique em **Encerrar votação agora** — a partir daí nenhum link
    funciona mais para votar.

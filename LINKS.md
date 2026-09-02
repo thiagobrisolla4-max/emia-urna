@@ -17,4 +17,9 @@ Credenciais de acesso ao painel: variável `ADMIN_PASSWORD` no Render
 (Environment). Só a Comissão sabe.
 
 ## Janela oficial de votação
-31/08/2026 a 05/09/2026, até 12h.
+31/08/2026 a **08/09/2026 (terça-feira), até 12h** — prazo prorrogado pela
+Comissão Eleitoral (era 05/09/2026).
+
+O sistema não encerra sozinho: a votação só fecha quando a Comissão clica
+em "Encerrar votação agora" no painel. A data acima é o texto mostrado ao
+eleitor e mora em `JANELA`, no topo do `server.js`.
