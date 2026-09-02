@@ -22,3 +22,7 @@ saida_instalador/
 
 # previa local da cedula (helper de dev, embute fotos)
 previa-cedula.html
+
+# Cache do Python (instalador.py / jabaquara.py)
+__pycache__/
+*.pyc

@@ -132,9 +132,10 @@ app.get('/', (req, res) => {
     <p>Para votar, use o link individual enviado pela Comissão Eleitoral
     (algo como <code>/votar/SEU-CODIGO</code>). Não existe uma página de
     votação genérica — cada credencial é pessoal e intransferível.</p>
-    <p><strong>Famílias:</strong> se você não recebeu ou perdeu o link, acesse
-    <a href="/acesso">/acesso</a> e informe um telefone, e-mail ou o nome
-    completo de um(a) estudante da família para chegar à sua cédula.</p>
+    <p><strong>Não recebeu ou perdeu seu link?</strong> Famílias e docentes
+    podem acessar <a href="/acesso">/acesso</a> e informar um telefone, e-mail,
+    o próprio nome completo ou o nome completo de um(a) estudante da família
+    para chegar à cédula certa.</p>
     <p><a href="/resultados">Ver resultados</a> (disponível após a apuração).</p>
   `));
 });
@@ -221,32 +222,44 @@ app.post('/votar/:token', ah(async (req, res) => {
   `));
 }));
 
-// ---------- Portal da Família (autoatendimento) ----------
-// A família recebe UM link só (/acesso). Lá a pessoa digita qualquer
-// telefone, e-mail ou o nome completo de um(a) estudante da família e é
-// levada à cédula da família. Um voto por família: se a família tem mais de
-// um estudante ou mais de um responsável, todos caem na MESMA credencial.
+// ---------- Portal de acesso à votação (autoatendimento) ----------
+// UM link só (/acesso) para TODO MUNDO que vota — famílias e docentes — que
+// não recebeu ou perdeu o link individual. A pessoa digita um dado
+// (telefone, e-mail, o próprio nome, ou o nome de um(a) estudante da família)
+// e é levada à sua cédula. Um voto por família: se a família tem mais de um
+// estudante ou mais de um responsável, todos caem na MESMA credencial. Quem é
+// docente E responsável por estudante e consta nas duas listas tem as duas
+// credenciais (uma em cada segmento).
 
 function acessoForm(msg, valor) {
   return `
     <h1>Acesso à votação — Conselho EMIA</h1>
-    <p>Digite <strong>um</strong> dos dados abaixo para chegar à cédula da sua
-    família:</p>
+    <p>Esta página é para <strong>todo mundo que vai votar</strong> — famílias
+    <strong>e docentes</strong> — que não recebeu ou perdeu o link individual.
+    Digite <strong>um</strong> dos dados abaixo e o sistema leva você à sua
+    cédula:</p>
     <ul>
-      <li>o <strong>telefone</strong> (celular) cadastrado na EMIA, ou</li>
-      <li>o <strong>e-mail</strong> cadastrado, ou</li>
-      <li>o <strong>nome completo</strong> de um(a) estudante da família.</li>
+      <li>seu <strong>telefone</strong> (celular) cadastrado na EMIA, ou</li>
+      <li>seu <strong>e-mail</strong> cadastrado, ou</li>
+      <li>seu <strong>nome completo</strong> (serve para docentes), ou</li>
+      <li>o <strong>nome completo</strong> de um(a) estudante da sua família.</li>
     </ul>
     ${msg || ''}
     <form method="post" action="/acesso">
       <input type="text" name="q" required autofocus autocomplete="off"
-        placeholder="Ex.: 11 98765-4321  •  nome@email.com  •  Maria Clara da Silva"
+        placeholder="Ex.: 11 98765-4321  •  nome@email.com  •  seu nome completo  •  nome do(a) estudante"
         value="${escapeHtml(valor || '')}">
       <button type="submit">Buscar minha cédula</button>
     </form>
-    <p class="warn">O voto é por família: <strong>apenas um(a) responsável</strong>
-    deve votar. Se a família tem mais de um(a) filho(a) na EMIA, ainda assim é
-    <strong>um único voto</strong> — combinem entre vocês quem vota.</p>
+    <p>Na tela seguinte aparece o <strong>segmento</strong> (Corpo Docente ou
+    Famílias) e um trecho do nome, para você confirmar que é a sua credencial
+    antes de abrir a cédula.</p>
+    <p class="warn">No segmento <strong>Famílias</strong> o voto é por família:
+    <strong>apenas um(a) responsável</strong> vota e, mesmo com mais de um(a)
+    filho(a) na EMIA, é <strong>um único voto</strong> — combinem entre vocês
+    quem vota. <strong>Docentes</strong> votam individualmente; quem é docente e
+    também responsável por estudante e consta nas duas listas pode votar nos
+    dois segmentos (uma vez em cada).</p>
     <p class="muted">Seu voto é secreto. O sistema usa seus dados só para te
     levar à cédula certa — não há nenhuma ligação entre você e o voto que for
     registrado.</p>
@@ -281,13 +294,15 @@ app.post('/acesso', ah(async (req, res) => {
   if (!r.ok) {
     return res.send(page('Acesso à votação', acessoForm(
       `<p class="warn">Digite um telefone completo (com DDD), um e-mail
-       completo, ou o nome e sobrenome de um(a) estudante.</p>`, q)));
+       completo, o seu nome e sobrenome, ou o nome e sobrenome de um(a)
+       estudante.</p>`, q)));
   }
   if (r.voters.length === 0) {
     return res.send(page('Acesso à votação', acessoForm(
       `<p class="warn">Não encontramos ninguém com esse dado. Tente outro
-       telefone/e-mail da família, ou o nome completo do(a) estudante. Se
-       nada funcionar, fale com a Comissão Eleitoral.</p>`, q)));
+       telefone/e-mail cadastrado, o seu nome completo (docentes) ou o nome
+       completo do(a) estudante. Se nada funcionar, fale com a Comissão
+       Eleitoral.</p>`, q)));
   }
   const host = req.protocol + '://' + req.get('host');
   const cards = r.voters.map((v) => `
@@ -300,10 +315,10 @@ app.post('/acesso', ah(async (req, res) => {
   res.send(page('Sua cédula', `
     <h1>Encontramos sua credencial</h1>
     ${r.voters.length > 1
-      ? '<p>Mais de um cadastro casou com esse dado. Escolha o seu:</p>'
-      : '<p>Confira o nome parcial abaixo e abra sua cédula.</p>'}
+      ? '<p>Mais de uma credencial casou com esse dado (por exemplo, quem é docente <em>e</em> responsável por estudante). Confira o segmento e escolha a que você quer usar agora:</p>'
+      : '<p>Confira o segmento e o trecho do nome abaixo e abra sua cédula.</p>'}
     ${cards}
-    <p class="warn">Se o nome não parece ser da sua família, volte e tente com
+    <p class="warn">Se não parece ser a sua credencial, volte e tente com
     outro dado. Em caso de dúvida, procure a Comissão Eleitoral.</p>
     <p><a href="/acesso">← tentar outro dado</a></p>
   `));

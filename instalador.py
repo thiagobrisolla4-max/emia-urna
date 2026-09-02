@@ -662,7 +662,9 @@ def write_outputs(docentes, fam_novas, fam_existentes, conflitos, descartadas,
         ("G_conflito_credencial_dupla.csv", "!!! credenciais dobradas já existentes — resolver antes de abrir"),
     ]:
         p(f"  {name:40s} {desc}")
-    (OUT / "RESUMO.txt").write_text(resumo.getvalue(), encoding="utf-8")
+    # utf-8-sig (com BOM) p/ o Bloco de Notas e o Get-Content do PowerShell 5.1
+    # lerem os acentos certo sem precisar de -Encoding UTF8.
+    (OUT / "RESUMO.txt").write_text(resumo.getvalue(), encoding="utf-8-sig")
     print("\n" + resumo.getvalue())
 
 
