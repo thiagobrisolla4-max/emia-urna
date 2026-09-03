@@ -550,11 +550,19 @@ Família de João e Ana Souza&#9;familia&#9;11988887777&#9;11988887777;joao@emai
     token é o final do link <code>/votar/…</code>, visível no CSV de
     credenciais). Serve para desfazer uma credencial que juntou famílias
     diferentes por engano: apague a errada e depois reimporte as certas em
-    "Importar eleitores". <strong>Uma credencial que já votou não é apagada</strong>
+    "Importar eleitores".</p>
+    <p>Sem a caixa marcada, <strong>uma credencial que já votou não é apagada</strong>
     (aparece na lista de recusadas).</p>
     <form method="post" action="/admin/remover-credencial"
-      onsubmit="return confirm('Apagar as credenciais dos tokens colados? As que já votaram serão mantidas.');">
+      onsubmit="return confirm('Apagar as credenciais dos tokens colados?');">
       <textarea name="tokens" rows="5" style="width:100%" placeholder="B3PLmdWNz27g&#10;7tAZsbP9jtp5"></textarea>
+      <label style="display:block;margin:.6em 0">
+        <input type="checkbox" name="anular_voto" value="1">
+        <strong>Anular também o voto já registrado</strong> por essas credenciais.
+        Use SÓ para desfazer credencial defeituosa que agrupou famílias
+        distintas — registre em ata e avise as famílias para votarem de novo
+        com o link novo. O voto anulado não volta.
+      </label>
       <button type="submit">Remover credenciais</button>
     </form>
 
@@ -627,23 +635,37 @@ app.post('/admin/publicar', requireAdmin, ah(async (req, res) => {
 app.post('/admin/remover-credencial', requireAdmin, ah(async (req, res) => {
   const tokens = String(req.body.tokens || '')
     .split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
+  const anular = req.body.anular_voto === '1';
   const removidas = [];
+  const removidasComAnulacao = [];
   const jaVotaram = [];
   const naoAchadas = [];
   for (const t of tokens) {
-    const r = await db.deleteVoterByToken(t);
-    if (r.ok) removidas.push(`${t} — ${r.display_name}`);
-    else if (r.reason === 'has_voted') jaVotaram.push(`${t} — ${r.display_name}`);
-    else naoAchadas.push(t);
+    if (anular) {
+      const r = await db.removeVoterAndAnnulVote(t);
+      if (!r.ok) { naoAchadas.push(t); continue; }
+      if (r.hadVoted) {
+        removidasComAnulacao.push(
+          `${t} — ${r.display_name}` + (r.voteAnnulled ? ' (voto anulado)' : ' (SEM voto correspondente para anular — conferir)'));
+      } else {
+        removidas.push(`${t} — ${r.display_name}`);
+      }
+    } else {
+      const r = await db.deleteVoterByToken(t);
+      if (r.ok) removidas.push(`${t} — ${r.display_name}`);
+      else if (r.reason === 'has_voted') jaVotaram.push(`${t} — ${r.display_name}`);
+      else naoAchadas.push(t);
+    }
   }
   const bloco = (titulo, arr) => (arr.length
     ? `<p class="warn">${titulo}:</p><ul>${arr.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>`
     : '');
   res.send(page('Remoção de credenciais', `
     <h1>Remoção de credenciais</h1>
-    <p>${removidas.length} credencial(is) removida(s).</p>
-    ${bloco('Removidas', removidas)}
-    ${bloco('Mantidas porque já votaram (não removidas)', jaVotaram)}
+    <p>${removidas.length + removidasComAnulacao.length} credencial(is) removida(s)${anular ? `, ${removidasComAnulacao.length} com anulação de voto` : ''}.</p>
+    ${bloco('Removidas (não tinham voto)', removidas)}
+    ${bloco('Removidas COM voto anulado', removidasComAnulacao)}
+    ${bloco('Mantidas porque já votaram (marque "anular o voto" para removê-las)', jaVotaram)}
     ${bloco('Tokens não encontrados', naoAchadas)}
     <p><a href="/admin/painel">Voltar ao painel</a></p>
   `));

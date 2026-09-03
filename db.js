@@ -212,6 +212,61 @@ async function deleteVoterByToken(token) {
   }
 }
 
+// Remove a credencial E ANULA o voto que ela lancou (se lancou). Usar SO para
+// desfazer credenciais defeituosas que agrupavam familias distintas — a
+// Comissao registra em ata e as familias votam de novo com o link novo.
+//
+// Como acha o voto: castVote() grava votes.cast_at e voters.voted_at com o
+// MESMO now() da transacao, entao sao iguais. Apaga UMA linha de votes desse
+// segmento com esse timestamp (fallback: a mais proxima em +-5s).
+async function removeVoterAndAnnulVote(token) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      'SELECT id, display_name, segment, has_voted, voted_at FROM voters WHERE token = $1 FOR UPDATE',
+      [token]
+    );
+    const v = r.rows[0];
+    if (!v) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'not_found' };
+    }
+    let voteAnnulled = false;
+    if (v.has_voted && v.voted_at) {
+      let del = await client.query(
+        `DELETE FROM votes WHERE ctid = (
+           SELECT ctid FROM votes WHERE segment = $1 AND cast_at = $2 LIMIT 1)`,
+        [v.segment, v.voted_at]
+      );
+      if (del.rowCount === 0) {
+        del = await client.query(
+          `DELETE FROM votes WHERE ctid = (
+             SELECT ctid FROM votes
+              WHERE segment = $1
+                AND cast_at BETWEEN $2::timestamptz - interval '5 seconds'
+                               AND $2::timestamptz + interval '5 seconds'
+              ORDER BY abs(extract(epoch FROM (cast_at - $2::timestamptz)))
+              LIMIT 1)`,
+          [v.segment, v.voted_at]
+        );
+      }
+      voteAnnulled = del.rowCount > 0;
+    }
+    await client.query('DELETE FROM voters WHERE id = $1', [v.id]);
+    await client.query('COMMIT');
+    return {
+      ok: true, display_name: v.display_name,
+      hadVoted: v.has_voted, voteAnnulled,
+    };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function castVote(token, candidateId) {
   const client = await pool.connect();
   try {
@@ -342,6 +397,7 @@ module.exports = {
   keyStats,
   getVoterByToken,
   deleteVoterByToken,
+  removeVoterAndAnnulVote,
   castVote,
   isVotingOpen,
   setSetting,
