@@ -120,14 +120,19 @@ def main():
     def is_jaba(prow):
         """A credencial da produção é da Jabaquara se:
           - (mais confiável) foi criada em/depois de --desde, se o CSV tem
-            'criado_em'; OU
+            'criado_em'. --desde compara o TIMESTAMP INTEIRO (ISO-8601 UTC),
+            então dá pra separar por hora: as outras EMIAs entraram em
+            2026-09-01T01:16Z e a Jabaquara a partir de 2026-09-01T19:15Z.
+            Use  --desde 2026-09-01T12:00:00Z .  OU
           - o contato dela bate com telefone/e-mail da lista da Jabaquara; OU
-          - mostra 2+ crianças e TODAS são crianças da lista da Jabaquara
-            (um display 'A • B' quase nunca colide entre EMIAs).
+          - mostra 2+ crianças e TODAS são crianças da lista da Jabaquara.
         Nunca por 1 nome só sem contato — 'Família de Daniel Moreira da Silva'
         existe em várias EMIAs."""
         if DESDE and prow.get("criado_em"):
-            return prow["criado_em"][:10] >= DESDE
+            ce = prow["criado_em"]
+            # ISO-8601 UTC ordena cronologicamente como string. Se --desde
+            # veio só como data (sem 'T'), compara só os 10 primeiros chars.
+            return (ce >= DESDE) if "T" in DESDE else (ce[:10] >= DESDE)
         c = str(prow["contato"] or "").strip().lower()
         if "@" in c:
             if c in jaba_emails:
@@ -184,10 +189,24 @@ def main():
     w("   NÃO são tocadas, mesmo com nome de família parecido.)")
     w("")
 
+    def spans_2_pieces(pkids, pcs):
+        """True se as crianças da credencial da produção cobrem 2+ das peças
+        corretas = ela realmente junta famílias distintas. Se cabe dentro de
+        UMA peça só, já é uma credencial limpa (ex.: a criada na mão hoje) —
+        não é cópia do merge, não mexer nela."""
+        hits = 0
+        for piece in pcs:
+            pk = {norm_name_key(c) for c in piece["children"]}
+            if pkids & pk:
+                hits += 1
+        return hits >= 2
+
     matched_bad = set()
     for cs, rawfam, pcs in bad_raw:
         cands = [p for p in prod_jaba
-                 if p["_kids"] and p["_kids"] <= set(cs) and p["token"] not in matched_bad]
+                 if p["_kids"] and p["_kids"] <= set(cs)
+                 and p["token"] not in matched_bad
+                 and spans_2_pieces(p["_kids"], pcs)]
         conf = [p for p in cands
                 if only_digits(p["contato"])[-10:] in {ph[-10:] for ph in rawfam["phones"]}]
         cands = conf or cands
