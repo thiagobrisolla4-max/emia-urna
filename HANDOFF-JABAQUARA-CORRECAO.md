@@ -96,18 +96,30 @@ Abrir `saida_instalador/FIX_relatorio.txt` e **conferir o cabeçalho**:
 
 ### 4.3 Aplicar (só depois de conferir o relatório)
 
-1. `/admin` → **"Remover credencial"** → colar `FIX_tokens_para_remover.txt`.
-2. `/admin` → **"Importar eleitores"** → colar `FIX_reimportar.tsv`.
-3. `/admin` → **"Importar eleitores"** → colar `FIX_faltando.tsv`.
-4. Baixar o CSV de novo, `Copy-Item` de novo, rodar
-   `python jaba_fix.py --desde 2026-09-01` outra vez.
-   **Deve dar `remover 0, reimportar 0, 0 faltando`** — é a prova de que fechou.
-5. Testar `/acesso`: "Felipe Souza Fugulin" (Marisa), "Milena Pantoja Vargas"
-   e o telefone `96569-1678` (Patricia Vargas — família que estava faltando),
-   + 3-4 nomes do relatório.
+O `jaba_fix.py` agora gera **3 arquivos** (plano único, commits `17215a6` +
+`0b7e8c5`):
 
-> Se "Remover credencial" com muitos tokens de uma vez travar / der timeout,
-> colar em blocos de ~150 tokens.
+1. `/admin` → **"Remover credencial"** → colar `FIX_remover.txt` →
+   **NÃO marcar** a caixa → enviar. (Tokens sem voto.)
+2. `/admin` → **"Remover credencial"** → colar `FIX_remover_ANULANDO.txt` →
+   **MARCAR** "Anular também o voto já registrado" → enviar. (Merges/duplicatas
+   que já votaram — o voto é anulado; a família revota com o link novo.)
+3. `/admin` → **"Importar eleitores"** → colar `FIX_importar_tudo.tsv` →
+   enviar. (Todas as credenciais limpas de uma vez: merges desfeitos +
+   duplicatas + famílias que faltavam.)
+4. Baixar o CSV de novo, `Copy-Item`, rodar `python jaba_fix.py --desde
+   2026-09-01` outra vez. **Deve dar `Remover SEM voto 0 / Remover ANULANDO 0
+   / importar 0`** — prova de que fechou.
+5. **Ata:** registrar os votos anulados (lista "VOTOS QUE SERÃO ANULADOS" no
+   relatório). **Avisar todas as famílias afetadas** (merge + duplicata) para
+   (re)votar com o link novo até 08/09 12h.
+6. Testar `/acesso` com nomes/telefones das famílias afetadas.
+
+> Se "Remover credencial" com muitos tokens travar / der timeout, colar em
+> blocos de ~150 tokens.
+>
+> `db.removeVoterAndAnnulVote()` acha o voto por `segment` + `cast_at ==
+> voters.voted_at` (castVote grava os dois com o mesmo `now()`); fallback ±5s.
 
 ---
 
