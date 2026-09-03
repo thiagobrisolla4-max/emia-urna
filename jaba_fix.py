@@ -30,7 +30,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import jabaquara as J
-from instalador import group_families, norm_name_key, dedup
+from instalador import group_families, norm_name_key, dedup, phone_variants
 
 BASE = Path(__file__).resolve().parent
 OUT = BASE / "saida_instalador"
@@ -83,36 +83,55 @@ def main():
     OUT.mkdir(exist_ok=True)
     rows, _ = J.load_rows()
 
-    # crianças da Jabaquara (para reconhecer credenciais da Jabaquara na produção)
+    # ------------------------------------------------------------------
+    # Assinaturas da Jabaquara para reconhecer, na produção, o que É da
+    # Jabaquara (e NÃO mexer em credenciais de Perus/Flores/Chácara/etc.
+    # que por acaso tenham o mesmo "Família de <nome>").
+    # ------------------------------------------------------------------
     jaba_children = set()
+    jaba_phones = set()
+    jaba_emails = set()
     for r in rows:
         for c in r["children"]:
             k = norm_name_key(c)
             if k:
                 jaba_children.add(k)
+        for ph in r["phones"]:
+            for v in phone_variants(ph):
+                jaba_phones.add(v)
+        for e in r["emails"]:
+            if e:
+                jaba_emails.add(e.strip().lower())
+
+    def only_digits(s):
+        return "".join(ch for ch in str(s or "") if ch.isdigit())
+
+    def is_jaba(prow):
+        """Uma credencial da produção é da Jabaquara SÓ se o contato dela bate
+        com um telefone OU e-mail da lista da Jabaquara. NÃO usamos só o nome:
+        'Família de Daniel Moreira da Silva' pode existir em várias EMIAs.
+        Assim nenhuma credencial de Perus/Flores/Chácara/Brasilândia é tocada."""
+        c = str(prow["contato"] or "").strip().lower()
+        if "@" in c:
+            return c in jaba_emails
+        d = only_digits(c)
+        return any(cand and cand in jaba_phones for cand in (d, d[-10:], d[-11:]))
 
     # agrupamento CRU (o que alimentou todas as gerações de blocos)
     raw = group_families(rows)
     # versão CORRETA (com desmembramento + junção de irmãos)
-    fixed, desmembr = J.split_unrelated_families(raw, list(rows))
+    fixed, _desmembr = J.split_unrelated_families(raw, list(rows))
     fixed, _merges = J.merge_by_surname(fixed)
 
-    # índice: conjunto de crianças (normalizado) -> família crua
-    raw_by_childset = []
-    for f in raw:
-        cs = frozenset(norm_name_key(c) for c in f["children"] if norm_name_key(c))
-        raw_by_childset.append((cs, f))
-
-    # famílias cruas que FORAM desmembradas: mapeia p/ as peças corretas
     def pieces_for(rawfam):
         cs = set(norm_name_key(c) for c in rawfam["children"])
-        got = [nf for nf in fixed
-               if cs & set(norm_name_key(c) for c in nf["children"])]
-        return got
+        return [nf for nf in fixed
+                if cs & set(norm_name_key(c) for c in nf["children"])]
 
-    # quais famílias cruas realmente quebraram (>1 peça correta correspondente)
+    # famílias cruas que quebraram em 2+ credenciais corretas = MERGE ERRADO
     bad_raw = []
-    for cs, f in raw_by_childset:
+    for f in raw:
+        cs = frozenset(norm_name_key(c) for c in f["children"] if norm_name_key(c))
         pcs = pieces_for(f)
         distinct = {frozenset(norm_name_key(c) for c in p["children"]) for p in pcs}
         if len(distinct) > 1:
@@ -120,8 +139,10 @@ def main():
 
     prod = load_prod()
     prod_fam = [p for p in prod if p["segmento"].startswith("fam")]
+    prod_jaba = [p for p in prod_fam if is_jaba(p)]
+    for p in prod_jaba:
+        p["_kids"] = frozenset(norm_children_from_display(p["nome"]))
 
-    # match: para cada família crua ruim, achar a(s) credencial(is) na produção
     remove_tokens = []
     reimport = []
     voted_blocked = []
@@ -129,72 +150,98 @@ def main():
     w = lambda *a: print(*a, file=rep)
 
     w("=" * 70)
-    w("  CORREÇÃO JABAQUARA — o que este script propõe")
+    w("  CORREÇÃO JABAQUARA — plano proposto (nada é feito online por este script)")
     w("=" * 70)
-    w(f"  Credenciais na produção .............. {len(prod)}")
-    w(f"  Merges errados detectados (fonte) ... {len(bad_raw)}")
+    w(f"  Credenciais na produção (total) ......... {len(prod)}")
+    w(f"  Credenciais de FAMÍLIA na produção ...... {len(prod_fam)}")
+    w(f"  Dessas, identificadas como JABAQUARA .... {len(prod_jaba)}")
+    w(f"  Credenciais corretas esperadas (Jabaquara) {len(fixed)}")
+    w(f"  Merges errados na fonte da Jabaquara .... {len(bad_raw)}")
+    w("  (só mexe em credencial reconhecida como Jabaquara — as demais EMIAs")
+    w("   NÃO são tocadas, mesmo com nome de família parecido.)")
     w("")
 
-    used_tokens = set()
+    matched_bad = set()  # tokens já contabilizados como merge errado
     for cs, rawfam, pcs in bad_raw:
-        # candidata: credencial da produção cujas crianças visíveis mais batem
-        best, best_score = None, 0
-        for p in prod_fam:
-            if p["token"] in used_tokens:
-                continue
-            pc = set(norm_children_from_display(p["nome"]))
-            if not pc:
-                continue
-            score = len(pc & cs)
-            # bônus se o contato bate
-            if p["contato"] and rawfam.get("phones") and \
-               "".join(ch for ch in p["contato"] if ch.isdigit())[-10:] in \
-               {ph[-10:] for ph in rawfam["phones"]}:
-                score += 1
-            if score > best_score:
-                best, best_score = p, score
+        # TODAS as credenciais Jabaquara cujas crianças visíveis são subконъjunto
+        # deste merge (pega as cópias duplicadas também).
+        cands = [p for p in prod_jaba
+                 if p["_kids"] and p["_kids"] <= set(cs) and p["token"] not in matched_bad]
+        # confirma pelo contato quando possível
+        conf = [p for p in cands
+                if only_digits(p["contato"])[-10:] in {ph[-10:] for ph in rawfam["phones"]}]
+        cands = conf or cands
         w("-" * 70)
-        w(f"  MERGE ERRADO: {rawfam['display']}")
+        w(f"  MERGE ERRADO (fonte): {rawfam['display']}")
         for p in pcs:
-            w(f"     vira -> {p['display']}   (contato {p['contato']})")
-        if not best or best_score == 0:
-            w("     [!] NÃO achei essa credencial na produção — pode já ter sido")
-            w("         corrigida, ou o CSV está desatualizado. Pulei.")
+            w(f"     -> credencial correta: {p['display']}   (contato {p['contato']})")
+        if not cands:
+            w("     [i] nenhuma credencial correspondente na produção — provável que")
+            w("         essa combinação não tenha sido importada, ou já foi corrigida.")
             continue
-        used_tokens.add(best["token"])
-        w(f"     credencial na produção: token {best['token']}  \"{best['nome']}\"")
-        if best["ja_votou"]:
-            voted_blocked.append((best, rawfam, pcs))
-            w("     [!!] ESSA CREDENCIAL JÁ VOTOU — não será removida.")
-            w("          A Comissão precisa decidir na mão (registrar ocorrência;")
-            w("          emitir credencial nova só para a(s) família(s) prejudicada(s)).")
-            continue
-        remove_tokens.append(best["token"])
-        for p in pcs:
-            reimport.append(tsv_line(p))
+        pecas_reimportadas = False
+        for p in cands:
+            matched_bad.add(p["token"])
+            if p["ja_votou"]:
+                voted_blocked.append((p, rawfam, pcs))
+                w(f"     [!!] token {p['token']}  \"{p['nome']}\"  —  JÁ VOTOU: NÃO remover.")
+            else:
+                remove_tokens.append(p["token"])
+                w(f"     remover token {p['token']}  \"{p['nome']}\"")
+                pecas_reimportadas = True
+        if pecas_reimportadas:
+            for p in pcs:
+                reimport.append(tsv_line(p))
 
-    # duplicatas exatas na produção (mesmo bloco colado 2x)
-    by_disp = defaultdict(list)
-    for p in prod_fam:
-        by_disp[p["nome"]].append(p)
-    dups = {k: v for k, v in by_disp.items() if len(v) > 1}
+    # duplicatas DENTRO da Jabaquara: mesmo conjunto de crianças (ou mesmo
+    # nome exato) aparecendo em 2+ tokens, fora os merges já tratados acima.
+    by_kids = defaultdict(list)
+    for p in prod_jaba:
+        if p["token"] in matched_bad:
+            continue
+        key = p["_kids"] or p["nome"]
+        by_kids[key].append(p)
+    dups = {k: v for k, v in by_kids.items() if len(v) > 1}
     if dups:
         w("-" * 70)
-        w(f"  CREDENCIAIS DUPLICADAS (mesmo nome 2+ vezes): {len(dups)}")
-        for nome, lst in dups.items():
-            manteve = next((x for x in lst if x["ja_votou"]), lst[0])
-            w(f"    \"{nome}\"  -> mantém {manteve['token']}"
-              + ("(votou)" if manteve["ja_votou"] else ""))
+        w(f"  DUPLICATAS DENTRO DA JABAQUARA (mesma família em 2+ credenciais): {len(dups)}")
+        for _key, lst in dups.items():
+            votou = [x for x in lst if x["ja_votou"]]
+            manter = (votou or lst)[0]
+            w(f"    \"{manter['nome']}\"  -> mantém {manter['token']}"
+              + ("  (votou)" if manter["ja_votou"] else ""))
             for x in lst:
-                if x["token"] != manteve["token"]:
-                    if x["ja_votou"]:
-                        w(f"        [!!] {x['token']} também votou — resolver na mão")
-                        voted_blocked.append((x, None, None))
-                    else:
-                        remove_tokens.append(x["token"])
-                        w(f"        remove {x['token']}")
+                if x["token"] == manter["token"]:
+                    continue
+                if x["ja_votou"]:
+                    voted_blocked.append((x, None, None))
+                    w(f"        [!!] {x['token']} também votou — resolver na mão")
+                else:
+                    remove_tokens.append(x["token"])
+                    w(f"        remover {x['token']}")
 
     remove_tokens = dedup(remove_tokens)
+    reimport = dedup(reimport)
+
+    # arquivo separado, detalhado, para os casos que já votaram
+    vb = io.StringIO()
+    vb.write("CASOS QUE JÁ VOTARAM — resolver na mão (não dá p/ remover sem "
+             "perder o voto)\n" + "=" * 70 + "\n\n")
+    for p, rawfam, pcs in voted_blocked:
+        vb.write(f"Credencial: \"{p['nome']}\"  (token {p['token']}, contato {p['contato']})\n")
+        if pcs:
+            vb.write("  Essa credencial juntava estas famílias distintas:\n")
+            for x in pcs:
+                vb.write(f"    - {x['display']}   (contato {x['contato']})\n")
+            vb.write("  O voto já lançado conta UMA vez para esse conjunto. Para cada\n")
+            vb.write("  família do conjunto que NÃO tenha sido quem votou, importe a\n")
+            vb.write("  linha correta abaixo (ela ganha token novo) e registre ocorrência:\n")
+            for x in pcs:
+                vb.write("    " + tsv_line(x) + "\n")
+        else:
+            vb.write("  (duplicata que também votou — verificar qual voto vale em ata)\n")
+        vb.write("\n")
+    (OUT / "FIX_votaram_resolver.txt").write_text(vb.getvalue(), encoding="utf-8-sig")
     (OUT / "FIX_tokens_para_remover.txt").write_text(
         "\n".join(remove_tokens) + ("\n" if remove_tokens else ""), encoding="utf-8")
     (OUT / "FIX_reimportar.tsv").write_text(
@@ -207,13 +254,20 @@ def main():
     w(f"  Bloqueadas por já terem votado: {len(voted_blocked)} "
       f"(ver acima; tratar na mão).")
     w("")
+    w("  ARQUIVOS GERADOS (saida_instalador/):")
+    w("   FIX_tokens_para_remover.txt  -> /admin > 'Remover credencial'")
+    w("   FIX_reimportar.tsv           -> /admin > 'Importar eleitores'")
+    w("   FIX_votaram_resolver.txt     -> casos que já votaram (ler e tratar em ata)")
+    w("")
     w("  PASSOS:")
-    w("   1. /admin -> 'Remover credencial': cole FIX_tokens_para_remover.txt")
-    w("   2. /admin -> 'Importar eleitores': cole FIX_reimportar.tsv")
-    w("   3. Teste /acesso com os nomes/telefones das famílias afetadas.")
-    w("   4. Para as 'bloqueadas por já terem votado': registrar ocorrência e,")
-    w("      se for o caso, importar manualmente só a credencial da família que")
-    w("      ficou sem voto (ela recebe um token novo).")
+    w("   1. Confira ESTE relatório inteiro. Nenhuma credencial de outra EMIA")
+    w("      aparece aqui — só Jabaquara.")
+    w("   2. /admin > 'Remover credencial': cole FIX_tokens_para_remover.txt")
+    w("   3. /admin > 'Importar eleitores': cole FIX_reimportar.tsv")
+    w("   4. Baixe o CSV de novo e rode este script mais uma vez: deve dar")
+    w("      0 merges e 0 duplicatas. (idempotente)")
+    w("   5. Trate FIX_votaram_resolver.txt em ata.")
+    w("   6. Teste /acesso com nomes/telefones das famílias afetadas.")
     (OUT / "FIX_relatorio.txt").write_text(rep.getvalue(), encoding="utf-8-sig")
     sys.stdout.write(rep.getvalue())
 
