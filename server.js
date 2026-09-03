@@ -545,6 +545,19 @@ Família de João e Ana Souza&#9;familia&#9;11988887777&#9;11988887777;joao@emai
     <p><a href="/admin/credenciais.csv">Baixar lista completa (CSV) para distribuição</a> —
     <a href="/admin/buscar">Buscar eleitor por nome (urna física / atendimento presencial)</a></p>
 
+    <h2>Remover credencial (corrigir importação errada)</h2>
+    <p>Cole os <strong>tokens</strong> das credenciais a apagar, um por linha (o
+    token é o final do link <code>/votar/…</code>, visível no CSV de
+    credenciais). Serve para desfazer uma credencial que juntou famílias
+    diferentes por engano: apague a errada e depois reimporte as certas em
+    "Importar eleitores". <strong>Uma credencial que já votou não é apagada</strong>
+    (aparece na lista de recusadas).</p>
+    <form method="post" action="/admin/remover-credencial"
+      onsubmit="return confirm('Apagar as credenciais dos tokens colados? As que já votaram serão mantidas.');">
+      <textarea name="tokens" rows="5" style="width:100%" placeholder="B3PLmdWNz27g&#10;7tAZsbP9jtp5"></textarea>
+      <button type="submit">Remover credenciais</button>
+    </form>
+
     <h2>Ocorrências técnicas</h2>
     <form method="post" action="/admin/ocorrencia">
       <input type="text" name="description" placeholder="Descreva a ocorrência" style="width:70%" required>
@@ -609,6 +622,31 @@ app.post('/admin/encerrar', requireAdmin, ah(async (req, res) => {
 app.post('/admin/publicar', requireAdmin, ah(async (req, res) => {
   await db.setSetting('published', '1');
   res.redirect('/admin/painel');
+}));
+
+app.post('/admin/remover-credencial', requireAdmin, ah(async (req, res) => {
+  const tokens = String(req.body.tokens || '')
+    .split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
+  const removidas = [];
+  const jaVotaram = [];
+  const naoAchadas = [];
+  for (const t of tokens) {
+    const r = await db.deleteVoterByToken(t);
+    if (r.ok) removidas.push(`${t} — ${r.display_name}`);
+    else if (r.reason === 'has_voted') jaVotaram.push(`${t} — ${r.display_name}`);
+    else naoAchadas.push(t);
+  }
+  const bloco = (titulo, arr) => (arr.length
+    ? `<p class="warn">${titulo}:</p><ul>${arr.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>`
+    : '');
+  res.send(page('Remoção de credenciais', `
+    <h1>Remoção de credenciais</h1>
+    <p>${removidas.length} credencial(is) removida(s).</p>
+    ${bloco('Removidas', removidas)}
+    ${bloco('Mantidas porque já votaram (não removidas)', jaVotaram)}
+    ${bloco('Tokens não encontrados', naoAchadas)}
+    <p><a href="/admin/painel">Voltar ao painel</a></p>
+  `));
 }));
 
 app.post('/admin/importar', requireAdmin, ah(async (req, res) => {

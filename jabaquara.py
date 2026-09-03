@@ -36,7 +36,7 @@ from pathlib import Path
 
 from instalador import (
     clean_name, clean_email, clean_phone, phone_variants,
-    norm_name_key, group_families, dedup, strip_acc, PARTICULAS,
+    norm_name_key, group_families, dedup, strip_acc, UF, PARTICULAS,
 )
 
 BASE = Path(__file__).resolve().parent
@@ -182,6 +182,98 @@ def _rebuild_display(children, resps, phones):
     return disp[:200]
 
 
+def _mk_family(member_rows):
+    """Monta um dict de família a partir de um conjunto de linhas de aluno."""
+    children = dedup(sum((r["children"] for r in member_rows), []))
+    resps = dedup(sum((r["responsibles"] for r in member_rows), []))
+    phones = dedup(sum((r["phones"] for r in member_rows), []))
+    emails = dedup(sum((r["emails"] for r in member_rows), []))
+    return dict(
+        segmento="familia",
+        unidade=member_rows[0]["unidade"] if member_rows else UNIDADE,
+        display=_rebuild_display(children, resps, phones),
+        contato=(phones[0] if phones else (emails[0] if emails else "")),
+        children=children, responsibles=resps, phones=phones, emails=emails,
+        keys=dedup(children + resps + phones + emails),
+        _srcs=[SRC.name], _phone_raw=[], _trusted=True, _members=member_rows,
+    )
+
+
+def _surname_tokens(name):
+    return {t for t in norm_name_key(name).split()
+            if t not in PARTICULAS and len(t) >= 3}
+
+
+def _members_by_family(fams, rows):
+    """Mapeia cada linha de aluno para a família (índice) a que ela pertence."""
+    by_phone, by_email, by_child = {}, {}, {}
+    for i, f in enumerate(fams):
+        for p in f["phones"]:
+            for v in phone_variants(p):
+                by_phone.setdefault(v, i)
+        for e in f["emails"]:
+            by_email.setdefault(e, i)
+        for c in f["children"]:
+            k = norm_name_key(c)
+            if k:
+                by_child.setdefault(k, i)
+    members = defaultdict(list)
+    for r in rows:
+        idx = None
+        for c in r["children"]:
+            idx = by_child.get(norm_name_key(c), idx)
+        if idx is None:
+            for p in r["phones"]:
+                for v in phone_variants(p):
+                    idx = by_phone.get(v, idx)
+        if idx is None:
+            for e in r["emails"]:
+                idx = by_email.get(e, idx)
+        if idx is not None:
+            members[idx].append(r)
+    return members
+
+
+def split_unrelated_families(fams, rows):
+    """Desfaz merges do union-find em que linhas de alunos SEM sobrenome em
+    comum (nem responsável completo em comum) foram unidas só por um
+    telefone/e-mail compartilhado — quase sempre erro de digitação da
+    planilha da secretaria, ou contato de terceiro (avó, motorista...).
+
+    Reagrupa as linhas de cada 'família' por conexão de NOME: duas linhas
+    ficam juntas se compartilham um sobrenome de criança OU um nome completo
+    (>=2 tokens) de responsável. Cada componente vira uma credencial.
+    Devolve (familias, lista_de_desmembramentos)."""
+    members = _members_by_family(fams, rows)
+    out, desmembr = [], []
+    for i, f in enumerate(fams):
+        mem = members.get(i, [])
+        if len(mem) <= 1:
+            out.append(f)
+            continue
+        surn = [set().union(*[_surname_tokens(n) for n in m["children"]])
+                if m["children"] else set() for m in mem]
+        resp = [{norm_name_key(n) for n in m["responsibles"] if len(n.split()) >= 2}
+                for m in mem]
+        uf = UF()
+        for a in range(len(mem)):
+            uf.find(a)
+            for b in range(a + 1, len(mem)):
+                if (surn[a] & surn[b]) or (resp[a] & resp[b]):
+                    uf.union(a, b)
+        comps = defaultdict(list)
+        for a in range(len(mem)):
+            comps[uf.find(a)].append(mem[a])
+        if len(comps) == 1:
+            out.append(f)
+            continue
+        novos = sorted((_mk_family(c) for c in comps.values()),
+                       key=lambda x: norm_name_key(x["display"]))
+        out.extend(novos)
+        desmembr.append((f["display"], [n["display"] for n in novos]))
+    return out, desmembr
+
+
 def merge_by_surname(fams):
     """2ª passada: junta famílias cujo telefone/e-mail não bateram mas que
     compartilham uma assinatura forte de sobrenome (>=2 sobrenomes incomuns
@@ -284,6 +376,13 @@ def main():
 
     fams = group_families(rows)
     print(f"[2] famílias após telefone/e-mail/nome: {len(fams)}")
+    fams, desmembr = split_unrelated_families(fams, rows)
+    print(f"[2b] após separar credenciais que juntaram famílias diferentes "
+          f"(telefone/e-mail compartilhado): {len(fams)} ({len(desmembr)} desmembradas)")
+    for antigo, partes in desmembr:
+        print(f"    separou: {antigo}")
+        for p in partes:
+            print(f"             -> {p}")
     fams, merges = merge_by_surname(fams)
     fams.sort(key=lambda f: norm_name_key(f["display"]))
     enrich_from_rows(fams, rows)
@@ -351,6 +450,14 @@ def main():
         w.writerow(["unidade", "crianca", "telefone_original", "telefone_limpo", "motivo"])
         w.writerows(suspeitos)
 
+    # ---- credenciais que juntavam famílias diferentes e foram separadas ----
+    with (OUT / "JABAQUARA_desmembradas.csv").open("w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["credencial_ERRADA_que_juntava_familias",
+                    "credenciais_corretas_geradas_no_lugar"])
+        for antigo, partes in desmembr:
+            w.writerow([antigo, "  ||  ".join(partes)])
+
     # ---- resumo ----
     r = io.StringIO()
     p = lambda *a: print(*a, file=r)
@@ -364,6 +471,8 @@ def main():
             turmas[t] += 1
     p(f"  Linhas de aluno lidas ............... {len(rows)}")
     p(f"  Familias distintas (credenciais) ... {len(fams)}")
+    p(f"  Credenciais desmembradas (juntavam familias diferentes): {len(desmembr)}")
+    p(f"     -> ver JABAQUARA_desmembradas.csv")
     p(f"  Juncoes de irmaos por sobrenome .... {len(merges)}")
     p(f"  Tamanho do bloco ................... {BLOCO}")
     p(f"  Numero de blocos .................. {nblocos}")
@@ -395,6 +504,8 @@ def main():
     p("   JABAQUARA_bloco_NN.tsv ......... colar no painel, um de cada vez")
     p("   JABAQUARA_completo.tsv ........ tudo junto (caso queira colar de uma vez)")
     p("   JABAQUARA_conferencia.csv .... abrir no Excel; revisar coluna 'alerta'")
+    p("   JABAQUARA_desmembradas.csv ... credenciais que juntavam familias")
+    p("                                 diferentes e foram separadas (CONFERIR)")
     p("   JABAQUARA_revisar_irmaos.csv . pares de familias c/ mesmo sobrenome")
     p("   JABAQUARA_telefones_suspeitos.csv")
     (OUT / "JABAQUARA_RESUMO.txt").write_text(r.getvalue(), encoding="utf-8-sig")

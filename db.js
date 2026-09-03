@@ -181,6 +181,37 @@ async function getVoterByToken(token) {
   return r.rows[0] || null;
 }
 
+// Remove uma credencial (e suas voter_keys, por ON DELETE CASCADE) a partir do
+// token. Recusa se o eleitor JA VOTOU — para corrigir importacao errada sem
+// arriscar mexer em quem ja participou. Nunca toca na tabela votes.
+async function deleteVoterByToken(token) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      'SELECT id, display_name, has_voted FROM voters WHERE token = $1 FOR UPDATE',
+      [token]
+    );
+    const v = r.rows[0];
+    if (!v) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'not_found' };
+    }
+    if (v.has_voted) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'has_voted', display_name: v.display_name };
+    }
+    await client.query('DELETE FROM voters WHERE id = $1', [v.id]);
+    await client.query('COMMIT');
+    return { ok: true, display_name: v.display_name };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function castVote(token, candidateId) {
   const client = await pool.connect();
   try {
@@ -310,6 +341,7 @@ module.exports = {
   lookupByRawKey,
   keyStats,
   getVoterByToken,
+  deleteVoterByToken,
   castVote,
   isVotingOpen,
   setSetting,
