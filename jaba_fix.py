@@ -62,6 +62,13 @@ def load_prod():
     if not path.exists():
         sys.exit("ERRO: baixe o CSV de credenciais do /admin e salve como "
                  f"{PROD.name} nesta pasta.")
+    if path.name != PROD.name:
+        sys.exit(
+            f"ERRO: '{PROD.name}' não existe — o script ia ler '{path.name}',\n"
+            "que é uma cópia ANTIGA (pré-Jabaquara). Faça o passo B2 do roteiro:\n"
+            '  Copy-Item "$env:USERPROFILE\\Downloads\\credenciais-emia.csv" `\n'
+            f'    "{BASE / PROD.name}" -Force\n'
+            "e rode de novo.")
     text = path.read_text(encoding="utf-8-sig")
     rows = list(csv.DictReader(text.splitlines()))
     out = []
@@ -81,6 +88,14 @@ def load_prod():
     tem_data = any(p["criado_em"] for p in out)
     print(f"  produção: {len(out)} credenciais lidas de {path.name}"
           + ("  (com coluna criado_em)" if tem_data else "  (SEM criado_em)"))
+    if DESDE and not tem_data:
+        sys.exit(
+            "ERRO: usou --desde mas o CSV não tem a coluna 'criado_em'.\n"
+            "Baixe o CSV FRESCO em /admin -> 'Baixar lista completa (CSV)',\n"
+            f"copie para '{PROD.name}' e rode de novo.")
+    if len(out) < 1200:
+        print("  [!] AVISO: só", len(out), "credenciais — esperado ~1700 com a "
+              "Jabaquara. O CSV pode estar desatualizado.")
     return out
 
 
