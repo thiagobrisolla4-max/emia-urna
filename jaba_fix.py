@@ -37,6 +37,13 @@ OUT = BASE / "saida_instalador"
 PROD = BASE / "credenciais-producao.csv"
 PROD_ALT = BASE / "credenciais-emia.csv"
 
+# Opcional: "python jaba_fix.py --desde 2026-09-01" -> toda credencial de
+# familia criada a partir dessa data conta como Jabaquara (sinal 100% confiavel,
+# se o CSV tiver a coluna 'criado_em'). Sem isso, cai na heuristica de contato.
+DESDE = None
+if "--desde" in sys.argv:
+    DESDE = sys.argv[sys.argv.index("--desde") + 1].strip()
+
 
 def norm_children_from_display(display):
     """'Família de A • B • C (+2)' -> ['a ...','b ...','c ...'] normalizados."""
@@ -68,8 +75,11 @@ def load_prod():
             segmento=(r.get("segmento") or "").strip().lower(),
             contato=(r.get("contato") or "").strip(),
             ja_votou=(r.get("ja_votou") or "").strip().lower() in ("sim", "s", "true", "1"),
+            criado_em=(r.get("criado_em") or "").strip(),
         ))
-    print(f"  produção: {len(out)} credenciais lidas de {path.name}")
+    tem_data = any(p["criado_em"] for p in out)
+    print(f"  produção: {len(out)} credenciais lidas de {path.name}"
+          + ("  (com coluna criado_em)" if tem_data else "  (SEM criado_em)"))
     return out
 
 
@@ -107,15 +117,26 @@ def main():
         return "".join(ch for ch in str(s or "") if ch.isdigit())
 
     def is_jaba(prow):
-        """Uma credencial da produção é da Jabaquara SÓ se o contato dela bate
-        com um telefone OU e-mail da lista da Jabaquara. NÃO usamos só o nome:
-        'Família de Daniel Moreira da Silva' pode existir em várias EMIAs.
-        Assim nenhuma credencial de Perus/Flores/Chácara/Brasilândia é tocada."""
+        """A credencial da produção é da Jabaquara se:
+          - (mais confiável) foi criada em/depois de --desde, se o CSV tem
+            'criado_em'; OU
+          - o contato dela bate com telefone/e-mail da lista da Jabaquara; OU
+          - mostra 2+ crianças e TODAS são crianças da lista da Jabaquara
+            (um display 'A • B' quase nunca colide entre EMIAs).
+        Nunca por 1 nome só sem contato — 'Família de Daniel Moreira da Silva'
+        existe em várias EMIAs."""
+        if DESDE and prow.get("criado_em"):
+            return prow["criado_em"][:10] >= DESDE
         c = str(prow["contato"] or "").strip().lower()
         if "@" in c:
-            return c in jaba_emails
-        d = only_digits(c)
-        return any(cand and cand in jaba_phones for cand in (d, d[-10:], d[-11:]))
+            if c in jaba_emails:
+                return True
+        else:
+            d = only_digits(c)
+            if any(cand and cand in jaba_phones for cand in (d, d[-10:], d[-11:])):
+                return True
+        kids = norm_children_from_display(prow["nome"])
+        return len(kids) >= 2 and all(k in jaba_children for k in kids)
 
     # agrupamento CRU (o que alimentou todas as gerações de blocos)
     raw = group_families(rows)
@@ -220,6 +241,52 @@ def main():
                     remove_tokens.append(x["token"])
                     w(f"        remover {x['token']}")
 
+    # --------------------------------------------------------------------
+    # FAMÍLIAS CORRETAS DA JABAQUARA QUE NÃO EXISTEM NA PRODUÇÃO (bloco que
+    # não foi colado, ou foi colado e algo deu errado). Compara cada família
+    # correta contra TODAS as credenciais de família da produção por
+    # criança em comum OU telefone em comum.
+    # --------------------------------------------------------------------
+    prod_child_index = set()
+    prod_phone_index = set()
+    for p in prod_fam:
+        for k in norm_children_from_display(p["nome"]):
+            prod_child_index.add(k)
+        dd = only_digits(p["contato"])
+        for cand in (dd, dd[-10:], dd[-11:]):
+            if cand:
+                prod_phone_index.add(cand)
+    # tokens já marcados p/ remover -> essas credenciais "somem", então as
+    # peças reimportadas cobrem o buraco; não conte como faltando.
+    reimport_kids = set()
+    for line in reimport:
+        disp = line.split("\t", 1)[0]
+        reimport_kids.update(norm_children_from_display(disp))
+
+    faltando = []
+    for nf in fixed:
+        kids = {norm_name_key(c) for c in nf["children"] if norm_name_key(c)}
+        phs = set()
+        for ph in nf["phones"]:
+            for v in phone_variants(ph):
+                phs.add(v)
+        na_prod = bool(kids & prod_child_index) or bool(phs & prod_phone_index)
+        coberta_por_reimport = bool(kids & reimport_kids)
+        if not na_prod and not coberta_por_reimport:
+            faltando.append(nf)
+    if faltando:
+        w("-" * 70)
+        w(f"  FAMÍLIAS DA JABAQUARA SEM CORRESPONDÊNCIA NA PRODUÇÃO: {len(faltando)}")
+        w("  (nenhuma criança nem telefone dessas famílias aparece na produção —")
+        w("   provável bloco não colado. Elas estão em FIX_faltando.tsv.)")
+        for nf in faltando[:40]:
+            w(f"     - {nf['display']}   (contato {nf['contato']})")
+        if len(faltando) > 40:
+            w(f"     ... e mais {len(faltando) - 40} (ver FIX_faltando.tsv)")
+    (OUT / "FIX_faltando.tsv").write_text(
+        "\n".join(tsv_line(nf) for nf in faltando) + ("\n" if faltando else ""),
+        encoding="utf-8")
+
     remove_tokens = dedup(remove_tokens)
     reimport = dedup(reimport)
 
@@ -250,13 +317,17 @@ def main():
     w("")
     w("=" * 70)
     w(f"  RESULTADO: remover {len(remove_tokens)} credencial(is), "
-      f"reimportar {len(reimport)} corretas.")
+      f"reimportar {len(reimport)} corretas, {len(faltando)} faltando importar.")
     w(f"  Bloqueadas por já terem votado: {len(voted_blocked)} "
       f"(ver acima; tratar na mão).")
+    if not DESDE:
+        w("  (rode com  --desde 2026-09-01  se o CSV tiver a coluna 'criado_em':")
+        w("   fica 100%% preciso sobre o que é Jabaquara.)")
     w("")
     w("  ARQUIVOS GERADOS (saida_instalador/):")
     w("   FIX_tokens_para_remover.txt  -> /admin > 'Remover credencial'")
     w("   FIX_reimportar.tsv           -> /admin > 'Importar eleitores'")
+    w("   FIX_faltando.tsv             -> /admin > 'Importar eleitores' (famílias que faltam)")
     w("   FIX_votaram_resolver.txt     -> casos que já votaram (ler e tratar em ata)")
     w("")
     w("  PASSOS:")
@@ -264,10 +335,11 @@ def main():
     w("      aparece aqui — só Jabaquara.")
     w("   2. /admin > 'Remover credencial': cole FIX_tokens_para_remover.txt")
     w("   3. /admin > 'Importar eleitores': cole FIX_reimportar.tsv")
-    w("   4. Baixe o CSV de novo e rode este script mais uma vez: deve dar")
-    w("      0 merges e 0 duplicatas. (idempotente)")
-    w("   5. Trate FIX_votaram_resolver.txt em ata.")
-    w("   6. Teste /acesso com nomes/telefones das famílias afetadas.")
+    w("   4. /admin > 'Importar eleitores': cole FIX_faltando.tsv")
+    w("   5. Baixe o CSV de novo e rode este script mais uma vez: deve dar")
+    w("      0 merges, 0 duplicatas, 0 faltando. (idempotente)")
+    w("   6. Trate FIX_votaram_resolver.txt em ata.")
+    w("   7. Teste /acesso com nomes/telefones das famílias afetadas.")
     (OUT / "FIX_relatorio.txt").write_text(rep.getvalue(), encoding="utf-8-sig")
     sys.stdout.write(rep.getvalue())
 

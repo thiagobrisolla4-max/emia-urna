@@ -43,7 +43,16 @@ BASE = Path(__file__).resolve().parent
 OUT = BASE / "saida_instalador"
 SRC = BASE / "Contatos alunos EMIA Jabaquara.xlsx"
 UNIDADE = "EMIA Jabaquara"
-BLOCO = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+def _arg_bloco():
+    # tolerante: ignora argv que não seja um número (ex.: quando jaba_fix.py
+    # importa este módulo e passa --desde), cai no padrão 60.
+    for a in sys.argv[1:]:
+        if a.isdigit():
+            return int(a)
+    return 60
+
+
+BLOCO = _arg_bloco()
 
 # Colunas (0-based) da planilha:
 #   0 = nº (lixo, tem repetição)   1 = NOME DO ALUNO

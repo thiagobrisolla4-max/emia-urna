@@ -292,7 +292,7 @@ async function stats() {
 
 async function listVoters() {
   const r = await pool.query(
-    'SELECT token, segment, display_name, contact, has_voted, voted_at FROM voters ORDER BY segment, display_name'
+    'SELECT token, segment, display_name, contact, has_voted, voted_at, created_at FROM voters ORDER BY segment, display_name'
   );
   return r.rows;
 }

@@ -706,7 +706,7 @@ app.post('/admin/vincular-chaves', requireAdmin, ah(async (req, res) => {
 app.get('/admin/credenciais.csv', requireAdmin, ah(async (req, res) => {
   const voters = await db.listVoters();
   const host = req.protocol + '://' + req.get('host');
-  const lines = ['nome,segmento,contato,link,ja_votou'];
+  const lines = ['nome,segmento,contato,link,ja_votou,criado_em'];
   for (const v of voters) {
     lines.push([
       csvEscape(v.display_name),
@@ -714,6 +714,7 @@ app.get('/admin/credenciais.csv', requireAdmin, ah(async (req, res) => {
       csvEscape(v.contact || ''),
       `${host}/votar/${v.token}`,
       v.has_voted ? 'sim' : 'nao',
+      v.created_at ? new Date(v.created_at).toISOString() : '',
     ].join(','));
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
