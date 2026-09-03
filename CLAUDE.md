@@ -34,13 +34,17 @@ parecer ambígua, em vez de assumir.
 
 Atualizado em **01/09/2026**. Links em `LINKS.md`.
 
-> **02/09/2026 — LEIA `HANDOFF-JABAQUARA-CORRECAO.md` PRIMEIRO.** A votação
+> **02-03/09/2026 — LEIA `HANDOFF-JABAQUARA-CORRECAO.md` PRIMEIRO.** A votação
 > foi aberta e prorrogada até 08/09 12h. A importação da Jabaquara foi feita
 > com uma versão do `jabaquara.py` que juntava famílias diferentes por
 > telefone/e-mail compartilhado; a força-tarefa de corrigir isso na produção
-> (via `jaba_fix.py` + seção "Remover credencial" no `/admin`) ficou pela
-> metade. O handoff tem o passo a passo. O resto desta seção está
-> desatualizado (votação já abriu, docentes e todas as EMIAs já importados).
+> (via `jaba_fix.py` — plano único: `FIX_remover.txt` /
+> `FIX_remover_ANULANDO.txt` / `FIX_importar_tudo.tsv` — + a seção "Remover
+> credencial" no `/admin`, agora com opção de anular o voto) está em
+> andamento. Roteiro clicável para o Thiago em
+> `_CORRECAO-JABAQUARA/PASSO-A-PASSO.html`; comunicados/ofício também nessa
+> pasta. O resto desta seção está desatualizado (votação já abriu, docentes e
+> todas as EMIAs já importados).
 
 - **Deploy JÁ FEITO.** Site no ar em https://emia-urna.onrender.com , repo
   `github.com/thiagobrisolla4-max/emia-urna`, deploy automático no push da

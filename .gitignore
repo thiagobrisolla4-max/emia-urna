@@ -26,3 +26,6 @@ previa-cedula.html
 # Cache do Python (instalador.py / jabaquara.py)
 __pycache__/
 *.pyc
+
+# Pasta local da força-tarefa Jabaquara (roteiro + comunicados, alguns com nomes de família)
+_CORRECAO-JABAQUARA/

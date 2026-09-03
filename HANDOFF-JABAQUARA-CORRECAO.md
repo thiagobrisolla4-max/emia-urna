@@ -160,8 +160,10 @@ O `jaba_fix.py` agora gera **3 arquivos** (plano único, commits `17215a6` +
 | `FIX_faltando.tsv` | famílias que faltam → "Importar eleitores" |
 | `FIX_votaram_resolver.txt` | casos que já votaram, p/ ata |
 
-Textos prontos (raiz do repo, não versionados): `AVISO-FAMILIAS-JABAQUARA.txt`,
-`OFICIO-COMISSAO-GESTAO-JABAQUARA.md`, `COMUNICADO-PRORROGACAO.txt`.
+Roteiro clicável para o Thiago: **`_CORRECAO-JABAQUARA/PASSO-A-PASSO.html`**
+(HTML local com comandos copiáveis + checklist salvo no navegador). Na mesma
+pasta: `AVISO-FAMILIAS-JABAQUARA.txt`, `OFICIO-COMISSAO-GESTAO-JABAQUARA.md`,
+`COMUNICADO-PRORROGACAO.txt`, `LEIA.txt`. Nada dessa pasta é versionado.
 
 ---
 
