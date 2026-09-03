@@ -12,15 +12,16 @@ que juntavam FAMÍLIAS DIFERENTES por um telefone/e-mail compartilhado
      completa"). Salve como  credenciais-producao.csv  nesta pasta.
   2. Reconstrói o agrupamento da Jabaquara (mesmo código do jabaquara.py) e
      descobre quais credenciais da produção são "merges errados".
-  3. Também detecta credenciais DUPLICADAS (mesmo bloco colado 2x).
-  4. Gera, em ./saida_instalador/:
-       FIX_tokens_para_remover.txt  -> colar em /admin "Remover credencial"
-       FIX_reimportar.tsv           -> colar em /admin "Importar eleitores"
-       FIX_relatorio.txt            -> o que vai acontecer, em texto
-     Credenciais erradas que JÁ VOTARAM não entram na remoção — ficam
-     listadas no relatório para a Comissão tratar na mão.
+  3. Também detecta credenciais DUPLICADAS (mesmo bloco colado 2x) e famílias
+     que faltam (bloco não colado).
+  4. Gera um PLANO ÚNICO em ./saida_instalador/:
+       FIX_remover.txt           -> /admin "Remover credencial" (SEM a caixa)
+       FIX_remover_ANULANDO.txt  -> /admin "Remover credencial" + MARCAR
+                                    "Anular também o voto já registrado"
+       FIX_importar_tudo.tsv     -> /admin "Importar eleitores" (tudo de uma vez)
+       FIX_relatorio.txt         -> o que vai acontecer, em texto
 
-Uso:  python jaba_fix.py
+Uso:  python jaba_fix.py [--desde 2026-09-01]
 """
 
 import csv
@@ -164,14 +165,15 @@ def main():
     for p in prod_jaba:
         p["_kids"] = frozenset(norm_children_from_display(p["nome"]))
 
-    remove_tokens = []
-    reimport = []
-    voted_blocked = []
+    remove_tokens = []           # tokens sem voto -> remoção normal
+    remove_annul = []            # tokens COM voto -> remover anulando o voto
+    pieces = []                  # credenciais corretas a (re)importar
+    anulacoes = []               # (token, nome) que terão voto anulado
     rep = io.StringIO()
     w = lambda *a: print(*a, file=rep)
 
     w("=" * 70)
-    w("  CORREÇÃO JABAQUARA — plano proposto (nada é feito online por este script)")
+    w("  CORREÇÃO JABAQUARA — plano único (nada é feito online por este script)")
     w("=" * 70)
     w(f"  Credenciais na produção (total) ......... {len(prod)}")
     w(f"  Credenciais de FAMÍLIA na produção ...... {len(prod_fam)}")
@@ -182,13 +184,10 @@ def main():
     w("   NÃO são tocadas, mesmo com nome de família parecido.)")
     w("")
 
-    matched_bad = set()  # tokens já contabilizados como merge errado
+    matched_bad = set()
     for cs, rawfam, pcs in bad_raw:
-        # TODAS as credenciais Jabaquara cujas crianças visíveis são subконъjunto
-        # deste merge (pega as cópias duplicadas também).
         cands = [p for p in prod_jaba
                  if p["_kids"] and p["_kids"] <= set(cs) and p["token"] not in matched_bad]
-        # confirma pelo contato quando possível
         conf = [p for p in cands
                 if only_digits(p["contato"])[-10:] in {ph[-10:] for ph in rawfam["phones"]}]
         cands = conf or cands
@@ -197,36 +196,32 @@ def main():
         for p in pcs:
             w(f"     -> credencial correta: {p['display']}   (contato {p['contato']})")
         if not cands:
-            w("     [i] nenhuma credencial correspondente na produção — provável que")
-            w("         essa combinação não tenha sido importada, ou já foi corrigida.")
+            w("     [i] nenhuma credencial correspondente na produção "
+              "(não importada, ou já corrigida).")
             continue
-        pecas_reimportadas = False
         for p in cands:
             matched_bad.add(p["token"])
             if p["ja_votou"]:
-                voted_blocked.append((p, rawfam, pcs))
-                w(f"     [!!] token {p['token']}  \"{p['nome']}\"  —  JÁ VOTOU: NÃO remover.")
+                remove_annul.append(p["token"])
+                anulacoes.append((p["token"], p["nome"]))
+                w(f"     REMOVER ANULANDO O VOTO: {p['token']}  \"{p['nome']}\"")
             else:
                 remove_tokens.append(p["token"])
-                w(f"     remover token {p['token']}  \"{p['nome']}\"")
-                pecas_reimportadas = True
-        if pecas_reimportadas:
-            for p in pcs:
-                reimport.append(tsv_line(p))
+                w(f"     remover (sem voto): {p['token']}  \"{p['nome']}\"")
+        pieces.extend(pcs)
 
-    # duplicatas DENTRO da Jabaquara: mesmo conjunto de crianças (ou mesmo
-    # nome exato) aparecendo em 2+ tokens, fora os merges já tratados acima.
+    # duplicatas DENTRO da Jabaquara: mesma família em 2+ tokens.
     by_kids = defaultdict(list)
     for p in prod_jaba:
         if p["token"] in matched_bad:
             continue
-        key = p["_kids"] or p["nome"]
-        by_kids[key].append(p)
+        by_kids[p["_kids"] or p["nome"]].append(p)
     dups = {k: v for k, v in by_kids.items() if len(v) > 1}
     if dups:
         w("-" * 70)
         w(f"  DUPLICATAS DENTRO DA JABAQUARA (mesma família em 2+ credenciais): {len(dups)}")
         for _key, lst in dups.items():
+            # mantém UMA (a que votou, se houver — o voto dela fica valendo)
             votou = [x for x in lst if x["ja_votou"]]
             manter = (votou or lst)[0]
             w(f"    \"{manter['nome']}\"  -> mantém {manter['token']}"
@@ -235,111 +230,105 @@ def main():
                 if x["token"] == manter["token"]:
                     continue
                 if x["ja_votou"]:
-                    voted_blocked.append((x, None, None))
-                    w(f"        [!!] {x['token']} também votou — resolver na mão")
+                    remove_annul.append(x["token"])
+                    anulacoes.append((x["token"], x["nome"] + " (cópia dobrada)"))
+                    w(f"        REMOVER ANULANDO O VOTO (voto dobrado): {x['token']}")
                 else:
                     remove_tokens.append(x["token"])
-                    w(f"        remover {x['token']}")
+                    w(f"        remover (sem voto): {x['token']}")
+
+    remove_tokens = dedup(remove_tokens)
+    remove_annul = dedup(remove_annul)
+    removidos = set(remove_tokens) | set(remove_annul) | matched_bad
 
     # --------------------------------------------------------------------
-    # FAMÍLIAS CORRETAS DA JABAQUARA QUE NÃO EXISTEM NA PRODUÇÃO (bloco que
-    # não foi colado, ou foi colado e algo deu errado). Compara cada família
-    # correta contra TODAS as credenciais de família da produção por
-    # criança em comum OU telefone em comum.
+    # Índice das crianças que JÁ estão na produção numa credencial LIMPA
+    # (não é merge errado nem vai ser removida). Serve p/ não reimportar
+    # família que já tem credencial boa (ex.: as criadas na mão hoje).
     # --------------------------------------------------------------------
-    prod_child_index = set()
-    prod_phone_index = set()
+    clean_child_index = set()
+    clean_phone_index = set()
     for p in prod_fam:
+        if p["token"] in removidos:
+            continue
         for k in norm_children_from_display(p["nome"]):
-            prod_child_index.add(k)
+            clean_child_index.add(k)
         dd = only_digits(p["contato"])
         for cand in (dd, dd[-10:], dd[-11:]):
             if cand:
-                prod_phone_index.add(cand)
-    # tokens já marcados p/ remover -> essas credenciais "somem", então as
-    # peças reimportadas cobrem o buraco; não conte como faltando.
-    reimport_kids = set()
-    for line in reimport:
-        disp = line.split("\t", 1)[0]
-        reimport_kids.update(norm_children_from_display(disp))
+                clean_phone_index.add(cand)
 
-    faltando = []
-    for nf in fixed:
+    def ja_tem_credencial_limpa(nf):
         kids = {norm_name_key(c) for c in nf["children"] if norm_name_key(c)}
-        phs = set()
+        if kids & clean_child_index:
+            return True
         for ph in nf["phones"]:
             for v in phone_variants(ph):
-                phs.add(v)
-        na_prod = bool(kids & prod_child_index) or bool(phs & prod_phone_index)
-        coberta_por_reimport = bool(kids & reimport_kids)
-        if not na_prod and not coberta_por_reimport:
-            faltando.append(nf)
+                if v in clean_phone_index:
+                    return True
+        return False
+
+    # peças dos merges: só reimporta as que ainda não têm credencial limpa
+    importar = []
+    vistos = set()
+    for nf in pieces:
+        key = frozenset(norm_name_key(c) for c in nf["children"])
+        if key in vistos or ja_tem_credencial_limpa(nf):
+            continue
+        vistos.add(key)
+        importar.append(nf)
+
+    # famílias inteiras que não existem em lugar nenhum (bloco não colado)
+    faltando = []
+    for nf in fixed:
+        key = frozenset(norm_name_key(c) for c in nf["children"])
+        if key in vistos or ja_tem_credencial_limpa(nf):
+            continue
+        vistos.add(key)
+        faltando.append(nf)
+
+    todas_linhas = [tsv_line(nf) for nf in importar] + [tsv_line(nf) for nf in faltando]
+    todas_linhas = dedup(todas_linhas)
+
+    (OUT / "FIX_remover.txt").write_text(
+        "\n".join(remove_tokens) + ("\n" if remove_tokens else ""), encoding="utf-8")
+    (OUT / "FIX_remover_ANULANDO.txt").write_text(
+        "\n".join(remove_annul) + ("\n" if remove_annul else ""), encoding="utf-8")
+    (OUT / "FIX_importar_tudo.tsv").write_text(
+        "\n".join(todas_linhas) + ("\n" if todas_linhas else ""), encoding="utf-8")
+
     if faltando:
         w("-" * 70)
-        w(f"  FAMÍLIAS DA JABAQUARA SEM CORRESPONDÊNCIA NA PRODUÇÃO: {len(faltando)}")
-        w("  (nenhuma criança nem telefone dessas famílias aparece na produção —")
-        w("   provável bloco não colado. Elas estão em FIX_faltando.tsv.)")
-        for nf in faltando[:40]:
+        w(f"  FAMÍLIAS SEM CREDENCIAL EM LUGAR NENHUM (bloco não colado): {len(faltando)}")
+        for nf in faltando[:50]:
             w(f"     - {nf['display']}   (contato {nf['contato']})")
-        if len(faltando) > 40:
-            w(f"     ... e mais {len(faltando) - 40} (ver FIX_faltando.tsv)")
-    (OUT / "FIX_faltando.tsv").write_text(
-        "\n".join(tsv_line(nf) for nf in faltando) + ("\n" if faltando else ""),
-        encoding="utf-8")
-
-    remove_tokens = dedup(remove_tokens)
-    reimport = dedup(reimport)
-
-    # arquivo separado, detalhado, para os casos que já votaram
-    vb = io.StringIO()
-    vb.write("CASOS QUE JÁ VOTARAM — resolver na mão (não dá p/ remover sem "
-             "perder o voto)\n" + "=" * 70 + "\n\n")
-    for p, rawfam, pcs in voted_blocked:
-        vb.write(f"Credencial: \"{p['nome']}\"  (token {p['token']}, contato {p['contato']})\n")
-        if pcs:
-            vb.write("  Essa credencial juntava estas famílias distintas:\n")
-            for x in pcs:
-                vb.write(f"    - {x['display']}   (contato {x['contato']})\n")
-            vb.write("  O voto já lançado conta UMA vez para esse conjunto. Para cada\n")
-            vb.write("  família do conjunto que NÃO tenha sido quem votou, importe a\n")
-            vb.write("  linha correta abaixo (ela ganha token novo) e registre ocorrência:\n")
-            for x in pcs:
-                vb.write("    " + tsv_line(x) + "\n")
-        else:
-            vb.write("  (duplicata que também votou — verificar qual voto vale em ata)\n")
-        vb.write("\n")
-    (OUT / "FIX_votaram_resolver.txt").write_text(vb.getvalue(), encoding="utf-8-sig")
-    (OUT / "FIX_tokens_para_remover.txt").write_text(
-        "\n".join(remove_tokens) + ("\n" if remove_tokens else ""), encoding="utf-8")
-    (OUT / "FIX_reimportar.tsv").write_text(
-        "\n".join(reimport) + ("\n" if reimport else ""), encoding="utf-8")
+        if len(faltando) > 50:
+            w(f"     ... e mais {len(faltando) - 50}")
+    if anulacoes:
+        w("-" * 70)
+        w(f"  VOTOS QUE SERÃO ANULADOS: {len(anulacoes)}  (a Comissão registra em ata")
+        w("  e avisa cada família para votar de novo com o link novo):")
+        for tok, nome in anulacoes:
+            w(f"     - {tok}  {nome}")
 
     w("")
     w("=" * 70)
-    w(f"  RESULTADO: remover {len(remove_tokens)} credencial(is), "
-      f"reimportar {len(reimport)} corretas, {len(faltando)} faltando importar.")
-    w(f"  Bloqueadas por já terem votado: {len(voted_blocked)} "
-      f"(ver acima; tratar na mão).")
+    w(f"  RESULTADO:")
+    w(f"    Remover SEM voto ................ {len(remove_tokens)}  -> FIX_remover.txt")
+    w(f"    Remover ANULANDO o voto ........ {len(remove_annul)}  -> FIX_remover_ANULANDO.txt")
+    w(f"    Credenciais limpas a importar .. {len(todas_linhas)}  -> FIX_importar_tudo.tsv")
+    w(f"       (merges desfeitos: {len(importar)}  |  famílias que faltavam: {len(faltando)})")
     if not DESDE:
-        w("  (rode com  --desde 2026-09-01  se o CSV tiver a coluna 'criado_em':")
-        w("   fica 100%% preciso sobre o que é Jabaquara.)")
+        w("  Dica: rode com  --desde 2026-09-01  (o CSV tem 'criado_em') p/ 100%% de precisão.")
     w("")
-    w("  ARQUIVOS GERADOS (saida_instalador/):")
-    w("   FIX_tokens_para_remover.txt  -> /admin > 'Remover credencial'")
-    w("   FIX_reimportar.tsv           -> /admin > 'Importar eleitores'")
-    w("   FIX_faltando.tsv             -> /admin > 'Importar eleitores' (famílias que faltam)")
-    w("   FIX_votaram_resolver.txt     -> casos que já votaram (ler e tratar em ata)")
-    w("")
-    w("  PASSOS:")
-    w("   1. Confira ESTE relatório inteiro. Nenhuma credencial de outra EMIA")
-    w("      aparece aqui — só Jabaquara.")
-    w("   2. /admin > 'Remover credencial': cole FIX_tokens_para_remover.txt")
-    w("   3. /admin > 'Importar eleitores': cole FIX_reimportar.tsv")
-    w("   4. /admin > 'Importar eleitores': cole FIX_faltando.tsv")
-    w("   5. Baixe o CSV de novo e rode este script mais uma vez: deve dar")
-    w("      0 merges, 0 duplicatas, 0 faltando. (idempotente)")
-    w("   6. Trate FIX_votaram_resolver.txt em ata.")
-    w("   7. Teste /acesso com nomes/telefones das famílias afetadas.")
+    w("  PASSOS NO /admin (nesta ordem):")
+    w("   1. 'Remover credencial': cole FIX_remover.txt  (SEM marcar a caixa).")
+    w("   2. 'Remover credencial': cole FIX_remover_ANULANDO.txt  e MARQUE a caixa")
+    w("      'Anular também o voto já registrado'.")
+    w("   3. 'Importar eleitores': cole FIX_importar_tudo.tsv .")
+    w("   4. Baixe o CSV de novo, rode este script de novo -> tem que dar 0/0/0.")
+    w("   5. Ata: registre os votos anulados. Avise TODAS as famílias afetadas")
+    w("      (merge + duplicata) para (re)votar com o link novo até 08/09 12h.")
     (OUT / "FIX_relatorio.txt").write_text(rep.getvalue(), encoding="utf-8-sig")
     sys.stdout.write(rep.getvalue())
 
